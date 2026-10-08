@@ -15,8 +15,13 @@ Controls
 - Previous / Play-Pause / Next buttons
 - Drag anywhere on the player to move it
 - Pin button: yellow upright pin = always on top, tilted outline = normal window
-- Double-arrow button (or double-click the player): switch between full and compact size
-- Right-click for the menu: Compact mode, Always on top, Open Yandex Music, Exit
+- Double-arrow button (or double-click the player): switch view, full -> compact -> vinyl
+- Vinyl view: a record with the cover on its label that spins while music plays
+- Volume bar on the left: click or drag it, or scroll the mouse wheel over the player.
+  It changes only Yandex Music's volume, never the computer's master volume.
+  It works with the Yandex Music desktop app once it has started playing.
+- Right-click for the menu: Full size / Compact / Vinyl, Volume bar, Always on top,
+  Open Yandex Music, Exit
 - If nothing is playing, the play button opens Yandex Music
 
 Position and mode are remembered in %APPDATA%\YaMiniPlayer\settings.txt.

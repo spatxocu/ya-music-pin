@@ -6,10 +6,12 @@
 // Written against C# 5 so it builds with the csc.exe that ships with Windows.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -70,6 +72,138 @@ namespace YaMini
         }
     }
 
+    // Volume of the Yandex Music app alone, as shown for it in the Windows volume mixer.
+    // The system master volume and other apps are never touched.
+    static class AppVolume
+    {
+        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+        class DeviceEnumerator { }
+
+        // Only the methods used here are declared properly; the rest just hold their vtable slots.
+        [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDeviceEnumerator
+        {
+            void EnumAudioEndpoints();
+            [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice device);
+        }
+
+        [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IMMDevice
+        {
+            [PreserveSig] int Activate(ref Guid iid, int clsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object instance);
+        }
+
+        [ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioSessionManager2
+        {
+            void GetAudioSessionControl();
+            void GetSimpleAudioVolume();
+            [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator sessions);
+        }
+
+        [ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioSessionEnumerator
+        {
+            [PreserveSig] int GetCount(out int count);
+            [PreserveSig] int GetSession(int index, out IAudioSessionControl2 session);
+        }
+
+        [ComImport, Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IAudioSessionControl2
+        {
+            void GetState();
+            void GetDisplayName();
+            void SetDisplayName();
+            void GetIconPath();
+            void SetIconPath();
+            void GetGroupingParam();
+            void SetGroupingParam();
+            void RegisterAudioSessionNotification();
+            void UnregisterAudioSessionNotification();
+            void GetSessionIdentifier();
+            void GetSessionInstanceIdentifier();
+            [PreserveSig] int GetProcessId(out uint processId);
+        }
+
+        [ComImport, Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface ISimpleAudioVolume
+        {
+            [PreserveSig] int SetMasterVolume(float level, ref Guid eventContext);
+            [PreserveSig] int GetMasterVolume(out float level);
+        }
+
+        const string AppNameRu = "Яндекс Музыка";
+
+        static bool IsYandexMusic(uint processId)
+        {
+            if (processId == 0) return false;
+            try
+            {
+                string name = Process.GetProcessById((int)processId).ProcessName;
+                return name.IndexOf(AppNameRu, StringComparison.OrdinalIgnoreCase) >= 0
+                    || (name.IndexOf("yandex", StringComparison.OrdinalIgnoreCase) >= 0
+                        && name.IndexOf("music", StringComparison.OrdinalIgnoreCase) >= 0);
+            }
+            catch (ArgumentException) { return false; }         // process already gone
+            catch (InvalidOperationException) { return false; }
+        }
+
+        // Yandex Music's audio streams on the default output device
+        static List<ISimpleAudioVolume> Sessions()
+        {
+            var found = new List<ISimpleAudioVolume>();
+            var devices = (IMMDeviceEnumerator)new DeviceEnumerator();
+            IMMDevice device;
+            if (devices.GetDefaultAudioEndpoint(0, 1, out device) != 0) return found;   // render, multimedia
+
+            Guid iid = typeof(IAudioSessionManager2).GUID;
+            object instance;
+            if (device.Activate(ref iid, 23, IntPtr.Zero, out instance) != 0) return found;
+
+            IAudioSessionEnumerator sessions;
+            if (((IAudioSessionManager2)instance).GetSessionEnumerator(out sessions) != 0) return found;
+            int count;
+            sessions.GetCount(out count);
+            for (int i = 0; i < count; i++)
+            {
+                IAudioSessionControl2 control;
+                uint processId;
+                if (sessions.GetSession(i, out control) != 0) continue;
+                if (control.GetProcessId(out processId) >= 0 && IsYandexMusic(processId))
+                    found.Add((ISimpleAudioVolume)control);
+            }
+            return found;
+        }
+
+        public static bool TryGet(out float level)
+        {
+            level = 0;
+            try
+            {
+                List<ISimpleAudioVolume> sessions = Sessions();
+                foreach (ISimpleAudioVolume s in sessions)
+                {
+                    float one;
+                    if (s.GetMasterVolume(out one) == 0) level = Math.Max(level, one);
+                }
+                return sessions.Count > 0;
+            }
+            catch (Exception) { return false; }
+        }
+
+        public static bool Set(float level)
+        {
+            try
+            {
+                List<ISimpleAudioVolume> sessions = Sessions();
+                Guid context = Guid.Empty;
+                foreach (ISimpleAudioVolume s in sessions) s.SetMasterVolume(level, ref context);
+                return sessions.Count > 0;
+            }
+            catch (Exception) { return false; }
+        }
+    }
+
     struct Part
     {
         public readonly string Text;
@@ -94,14 +228,16 @@ namespace YaMini
         public readonly Canvas Host;
 
         readonly double fontSize;
+        readonly bool centered;
         readonly Canvas strip = new Canvas();
         readonly TranslateTransform shift = new TranslateTransform();
         Part[] parts = new Part[0];
 
-        public Marquee(Canvas host, double fontSize)
+        public Marquee(Canvas host, double fontSize, bool centered)
         {
             Host = host;
             this.fontSize = fontSize;
+            this.centered = centered;
             strip.RenderTransform = shift;
             host.Children.Add(strip);
             host.SizeChanged += delegate { Layout(); };
@@ -138,6 +274,7 @@ namespace YaMini
             double width = first.DesiredSize.Width;
             if (width <= room)
             {
+                if (centered) Canvas.SetLeft(first, Math.Floor((room - width) / 2));
                 strip.Children.Add(first);
                 return;
             }
@@ -171,21 +308,32 @@ namespace YaMini
 
         public readonly Window Window;
 
-        readonly FrameworkElement normalView, compactView;
+        const int Full = 0, Compact = 1, Vinyl = 2;
+        static readonly string[] ModeNames = { "full", "compact", "vinyl" };
+
+        readonly FrameworkElement[] views;
+        readonly FrameworkElement volBar;
+        readonly RowDefinition volEmpty, volFull;
         readonly Border art, artC;
-        readonly UIElement artNote, artNoteC;
+        readonly System.Windows.Shapes.Ellipse discArt;
+        readonly UIElement[] artNotes;
         readonly System.Windows.Shapes.Rectangle backdrop;
-        readonly Marquee titleLine, artistLine, compactLine;
+        readonly Marquee titleLine, artistLine, compactLine, titleLineV, artistLineV;
         string lastTitle, lastArtist;
-        readonly System.Windows.Shapes.Path playIcon, playIconC, pinIcon, pinIconC;
-        readonly Button pinBtn, pinBtnC;
-        readonly MenuItem compactItem, topmostItem;
+        readonly System.Windows.Shapes.Path[] playIcons, pinIcons;
+        readonly Button[] pinBtns;
+        readonly MenuItem[] modeItems;
+        readonly MenuItem topmostItem, volItem;
+        readonly AnimationClock spinClock;
         readonly string settingsPath;
 
         Manager manager;
         Session session;
         bool busy;
-        bool compact;
+        int mode;
+        bool playing;
+        bool volDragging;
+        double volLevel = -1;
         long artHash = -1;
 
         public Player()
@@ -193,34 +341,74 @@ namespace YaMini
             using (Stream xaml = Assembly.GetExecutingAssembly().GetManifestResourceStream("Player.xaml"))
                 Window = (Window)XamlReader.Load(xaml);
 
-            normalView = Find<FrameworkElement>("NormalView");
-            compactView = Find<FrameworkElement>("CompactView");
+            views = new[]
+            {
+                Find<FrameworkElement>("NormalView"), Find<FrameworkElement>("CompactView"), Find<FrameworkElement>("VinylView")
+            };
             art = Find<Border>("Art");
             artC = Find<Border>("ArtC");
-            artNote = Find<UIElement>("ArtNote");
-            artNoteC = Find<UIElement>("ArtNoteC");
+            discArt = Find<System.Windows.Shapes.Ellipse>("DiscArt");
+            artNotes = new[] { Find<UIElement>("ArtNote"), Find<UIElement>("ArtNoteC"), Find<UIElement>("ArtNoteV") };
             backdrop = Find<System.Windows.Shapes.Rectangle>("Backdrop");
-            titleLine = new Marquee(Find<Canvas>("TitleHost"), 14);
-            artistLine = new Marquee(Find<Canvas>("ArtistHost"), 12);
-            compactLine = new Marquee(Find<Canvas>("LineHost"), 12.5);
-            playIcon = Find<System.Windows.Shapes.Path>("PlayIcon");
-            playIconC = Find<System.Windows.Shapes.Path>("PlayIconC");
+            titleLine = new Marquee(Find<Canvas>("TitleHost"), 14, false);
+            artistLine = new Marquee(Find<Canvas>("ArtistHost"), 12, false);
+            compactLine = new Marquee(Find<Canvas>("LineHost"), 12.5, false);
+            titleLineV = new Marquee(Find<Canvas>("TitleHostV"), 14, true);
+            artistLineV = new Marquee(Find<Canvas>("ArtistHostV"), 12, true);
+            playIcons = new[]
+            {
+                Find<System.Windows.Shapes.Path>("PlayIcon"), Find<System.Windows.Shapes.Path>("PlayIconC"),
+                Find<System.Windows.Shapes.Path>("PlayIconV")
+            };
+            pinIcons = new[]
+            {
+                Find<System.Windows.Shapes.Path>("PinIcon"), Find<System.Windows.Shapes.Path>("PinIconC"),
+                Find<System.Windows.Shapes.Path>("PinIconV")
+            };
+            pinBtns = new[] { Find<Button>("PinBtn"), Find<Button>("PinBtnC"), Find<Button>("PinBtnV") };
 
-            Find<Button>("PrevBtn").Click += OnPrev;
-            Find<Button>("PrevBtnC").Click += OnPrev;
-            Find<Button>("NextBtn").Click += OnNext;
-            Find<Button>("NextBtnC").Click += OnNext;
-            Find<Button>("PlayBtn").Click += OnPlay;
-            Find<Button>("PlayBtnC").Click += OnPlay;
-            pinIcon = Find<System.Windows.Shapes.Path>("PinIcon");
-            pinIconC = Find<System.Windows.Shapes.Path>("PinIconC");
-            pinBtn = Find<Button>("PinBtn");
-            pinBtnC = Find<Button>("PinBtnC");
-            pinBtn.Click += OnPin;
-            pinBtnC.Click += OnPin;
-            Find<Button>("ExpandBtn").Click += delegate { SetCompact(false); SaveSettings(); };
-            Find<Button>("CompactBtn").Click += delegate { SetCompact(true); SaveSettings(); };
+            foreach (string suffix in new[] { "", "C", "V" })
+            {
+                Find<Button>("PrevBtn" + suffix).Click += OnPrev;
+                Find<Button>("NextBtn" + suffix).Click += OnNext;
+                Find<Button>("PlayBtn" + suffix).Click += OnPlay;
+                Find<Button>("PinBtn" + suffix).Click += OnPin;
+            }
+            // The size button in each view leads to the next one: full -> compact -> vinyl -> full
+            Find<Button>("CompactBtn").Click += delegate { SetMode(Compact); SaveSettings(); };
+            Find<Button>("ExpandBtn").Click += delegate { SetMode(Vinyl); SaveSettings(); };
+            Find<Button>("ModeBtnV").Click += delegate { SetMode(Full); SaveSettings(); };
             Find<Button>("CloseBtn").Click += delegate { Window.Close(); };
+            Find<Button>("CloseBtnV").Click += delegate { Window.Close(); };
+
+            // The record turns once every 7 seconds and holds its angle while paused
+            var spin = new DoubleAnimation(0, 360, new Duration(TimeSpan.FromSeconds(7))) { RepeatBehavior = RepeatBehavior.Forever };
+            spinClock = spin.CreateClock();
+            Find<FrameworkElement>("Disc").RenderTransform.ApplyAnimationClock(RotateTransform.AngleProperty, spinClock);
+            spinClock.Controller.Pause();
+
+            volBar = Find<FrameworkElement>("VolBar");
+            volEmpty = Find<RowDefinition>("VolEmpty");
+            volFull = Find<RowDefinition>("VolFull");
+            volBar.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
+            {
+                e.Handled = true;   // do not start dragging the window
+                volDragging = volBar.CaptureMouse();
+                SetVolume(1 - e.GetPosition(volBar).Y / volBar.ActualHeight);
+            };
+            volBar.MouseMove += delegate(object s, MouseEventArgs e)
+            {
+                if (volDragging) SetVolume(1 - e.GetPosition(volBar).Y / volBar.ActualHeight);
+            };
+            volBar.MouseLeftButtonUp += delegate
+            {
+                volDragging = false;
+                volBar.ReleaseMouseCapture();
+            };
+            Window.MouseWheel += delegate(object s, MouseWheelEventArgs e)
+            {
+                if (volLevel >= 0) SetVolume(volLevel + (e.Delta > 0 ? 0.05 : -0.05));
+            };
 
             // Keep the blurred cover inside the rounded card
             var clipGrid = Find<FrameworkElement>("ClipGrid");
@@ -229,8 +417,17 @@ namespace YaMini
                 clipGrid.Clip = new RectangleGeometry(new Rect(0, 0, clipGrid.ActualWidth, clipGrid.ActualHeight), 13, 13);
             };
 
-            compactItem = new MenuItem { Header = "Compact mode", IsCheckable = true };
-            compactItem.Click += delegate { SetCompact(compactItem.IsChecked); SaveSettings(); };
+            modeItems = new[]
+            {
+                new MenuItem { Header = "Full size" }, new MenuItem { Header = "Compact" }, new MenuItem { Header = "Vinyl" }
+            };
+            for (int i = 0; i < modeItems.Length; i++)
+            {
+                int target = i;
+                modeItems[i].Click += delegate { SetMode(target); SaveSettings(); };
+            }
+            volItem = new MenuItem { Header = "Volume bar", IsCheckable = true, IsChecked = true };
+            volItem.Click += delegate { SetVolumeBar(volItem.IsChecked); SaveSettings(); };
             topmostItem = new MenuItem { Header = "Always on top", IsCheckable = true, IsChecked = true };
             topmostItem.Click += delegate { SetTopmost(topmostItem.IsChecked); SaveSettings(); };
             var openItem = new MenuItem { Header = "Open Yandex Music" };
@@ -238,12 +435,34 @@ namespace YaMini
             var exitItem = new MenuItem { Header = "Exit" };
             exitItem.Click += delegate { Window.Close(); };
             var menu = new ContextMenu();
-            menu.Items.Add(compactItem);
+            foreach (MenuItem item in modeItems) menu.Items.Add(item);
+            menu.Items.Add(new Separator());
+            menu.Items.Add(volItem);
             menu.Items.Add(topmostItem);
             menu.Items.Add(new Separator());
             menu.Items.Add(openItem);
             menu.Items.Add(exitItem);
             Window.ContextMenu = menu;
+
+            // When the view changes size, grow away from the nearest screen edges so it stays on screen
+            Window.SizeChanged += delegate(object s, SizeChangedEventArgs e)
+            {
+                if (!Window.IsLoaded) return;   // the first layout must not move the saved position
+                Rect work = SystemParameters.WorkArea;
+                if (Window.Top + e.PreviousSize.Height / 2 > work.Top + work.Height / 2)
+                    Window.Top += e.PreviousSize.Height - e.NewSize.Height;
+                if (Window.Left + e.PreviousSize.Width / 2 > work.Left + work.Width / 2)
+                    Window.Left += e.PreviousSize.Width - e.NewSize.Width;
+                SaveSettings();
+            };
+            // A spot saved for a small view can push a bigger one past the edge of the main screen
+            Window.Loaded += delegate
+            {
+                Rect work = SystemParameters.WorkArea;
+                if (!work.Contains(new Point(Window.Left, Window.Top))) return;
+                Window.Left = Math.Max(work.Left, Math.Min(Window.Left, work.Right - Window.ActualWidth));
+                Window.Top = Math.Max(work.Top, Math.Min(Window.Top, work.Bottom - Window.ActualHeight));
+            };
 
             Window.MouseLeftButtonDown += OnMouseDown;
             Window.Closing += delegate { SaveSettings(); };
@@ -251,12 +470,13 @@ namespace YaMini
             settingsPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "YaMiniPlayer", "settings.txt");
             SetTopmost(true);
+            SetMode(Full);
             LoadSettings();
             ShowIdle();
 
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-            timer.Tick += async delegate { await Refresh(); };
-            Window.Loaded += async delegate { await Refresh(); timer.Start(); };
+            timer.Tick += async delegate { ReadVolume(); await Refresh(); };
+            Window.Loaded += async delegate { ReadVolume(); await Refresh(); timer.Start(); };
         }
 
         T Find<T>(string name) where T : class
@@ -270,7 +490,7 @@ namespace YaMini
         {
             if (e.ClickCount == 2)
             {
-                SetCompact(!compact);
+                SetMode((mode + 1) % views.Length);
                 SaveSettings();
                 return;
             }
@@ -278,12 +498,56 @@ namespace YaMini
             SaveSettings();
         }
 
-        void SetCompact(bool value)
+        void SetMode(int value)
         {
-            compact = value;
-            compactItem.IsChecked = value;
-            normalView.Visibility = value ? Visibility.Collapsed : Visibility.Visible;
-            compactView.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+            mode = value;
+            for (int i = 0; i < views.Length; i++)
+            {
+                views[i].Visibility = i == value ? Visibility.Visible : Visibility.Collapsed;
+                modeItems[i].IsChecked = i == value;
+            }
+            UpdateSpin();
+        }
+
+        void UpdateSpin()
+        {
+            if (playing && mode == Vinyl) spinClock.Controller.Resume();
+            else spinClock.Controller.Pause();
+        }
+
+        // ---- volume ----------------------------------------------------------
+
+        void SetVolumeBar(bool visible)
+        {
+            volItem.IsChecked = visible;
+            volBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // Picks up changes made elsewhere, e.g. in the Windows volume mixer
+        void ReadVolume()
+        {
+            if (volDragging) return;
+            float level;
+            volLevel = AppVolume.TryGet(out level) ? level : -1;
+            ShowVolume();
+        }
+
+        void SetVolume(double level)
+        {
+            level = Math.Max(0, Math.Min(1, level));
+            volLevel = AppVolume.Set((float)level) ? level : -1;
+            ShowVolume();
+        }
+
+        void ShowVolume()
+        {
+            bool known = volLevel >= 0;
+            volEmpty.Height = new GridLength(known ? 1 - volLevel : 1, GridUnitType.Star);
+            volFull.Height = new GridLength(known ? volLevel : 0, GridUnitType.Star);
+            volBar.Opacity = known ? 1 : 0.4;
+            volBar.ToolTip = known
+                ? "Yandex Music volume: " + Math.Round(volLevel * 100) + "%"
+                : "Volume: play something in the Yandex Music app first";
         }
 
         void OnPin(object sender, RoutedEventArgs e)
@@ -300,13 +564,13 @@ namespace YaMini
             Brush yellow = new SolidColorBrush(Color.FromRgb(0xFF, 0xCC, 0x00));
             Brush outline = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF));
             string tip = value ? "Always on top: on (click to unpin)" : "Always on top: off (click to pin)";
-            foreach (var icon in new[] { pinIcon, pinIconC })
+            foreach (var icon in pinIcons)
             {
                 icon.Fill = value ? yellow : Brushes.Transparent;
                 icon.Stroke = value ? yellow : outline;
                 icon.RenderTransform = value ? Transform.Identity : new RotateTransform(45);
             }
-            foreach (var btn in new[] { pinBtn, pinBtnC })
+            foreach (var btn in pinBtns)
             {
                 btn.ToolTip = tip;
                 // An active pin stays fully lit instead of dimming with the other secondary buttons
@@ -326,7 +590,9 @@ namespace YaMini
                     string key = line.Substring(0, eq), val = line.Substring(eq + 1);
                     if (key == "left") left = double.Parse(val, CultureInfo.InvariantCulture);
                     else if (key == "top") top = double.Parse(val, CultureInfo.InvariantCulture);
-                    else if (key == "compact") SetCompact(val == "1");
+                    else if (key == "compact") { if (val == "1") SetMode(Compact); }   // settings from before vinyl mode
+                    else if (key == "mode") SetMode(Math.Max(0, Array.IndexOf(ModeNames, val)));
+                    else if (key == "volbar") SetVolumeBar(val == "1");
                     else if (key == "topmost") SetTopmost(val == "1");
                 }
             }
@@ -359,8 +625,9 @@ namespace YaMini
                 {
                     "left=" + Window.Left.ToString(CultureInfo.InvariantCulture),
                     "top=" + Window.Top.ToString(CultureInfo.InvariantCulture),
-                    "compact=" + (compact ? "1" : "0"),
-                    "topmost=" + (Window.Topmost ? "1" : "0")
+                    "mode=" + ModeNames[mode],
+                    "topmost=" + (Window.Topmost ? "1" : "0"),
+                    "volbar=" + (volItem.IsChecked ? "1" : "0")
                 });
             }
             catch (IOException) { }
@@ -449,16 +716,17 @@ namespace YaMini
         void ShowIdle()
         {
             SetPlaying(false);
-            SetText("Yandex Music", "Nothing playing — press play to open", null);
+            SetText("Yandex Music", "Press play to open", null);
             SetArt(null);
             artHash = -1;
         }
 
-        void SetPlaying(bool playing)
+        void SetPlaying(bool value)
         {
-            Geometry g = Geometry.Parse(playing ? PauseGeo : PlayGeo);
-            playIcon.Data = g;
-            playIconC.Data = g;
+            playing = value;
+            Geometry g = Geometry.Parse(value ? PauseGeo : PlayGeo);
+            foreach (var icon in playIcons) icon.Data = g;
+            UpdateSpin();
         }
 
         void SetText(string title, string artist, string album)
@@ -478,11 +746,14 @@ namespace YaMini
             string tip = title;
             if (artist.Length > 0) tip += "\n" + artist;
             if (!string.IsNullOrEmpty(album)) tip += "\n" + album;
-            titleLine.Host.ToolTip = tip;
-            artistLine.Host.ToolTip = tip;
-            compactLine.Host.ToolTip = tip;
+            titleLineV.Set(new Part(title, Brushes.White, FontWeights.SemiBold));
+            artistLineV.Set(new Part(artist, Dim(0xB3), FontWeights.Normal));
+
+            foreach (Marquee line in new[] { titleLine, artistLine, compactLine, titleLineV, artistLineV })
+                line.Host.ToolTip = tip;
             art.ToolTip = tip;
             artC.ToolTip = tip;
+            discArt.ToolTip = tip;
         }
 
         static Brush Dim(byte alpha)
@@ -529,9 +800,10 @@ namespace YaMini
             Brush cover = image == null ? null : new ImageBrush(image) { Stretch = Stretch.UniformToFill };
             art.Background = cover ?? placeholder;
             artC.Background = cover ?? placeholder;
+            discArt.Fill = cover ?? placeholder;
             backdrop.Fill = cover;
-            artNote.Visibility = image == null ? Visibility.Visible : Visibility.Collapsed;
-            artNoteC.Visibility = artNote.Visibility;
+            foreach (UIElement note in artNotes)
+                note.Visibility = image == null ? Visibility.Visible : Visibility.Collapsed;
         }
 
         // ---- launching Yandex Music -----------------------------------------

@@ -22,7 +22,8 @@
 - **Track title, artist and album art**, with the cover softly blurred into the background
 - **Long names scroll** to the left in a loop instead of being cut off
 - **Always on top**, with a pin button to switch it off (yellow pin = pinned)
-- **Two sizes**: full and compact, one click to switch
+- **Three views**: full, compact, and vinyl, where a record with the cover on its label spins while music plays
+- **Volume bar** for Yandex Music alone; the computer's master volume is never touched
 - **Drag it anywhere**; it remembers its place, size and pin state
 - **One small `.exe`**: nothing to install, nothing running in the background
 
@@ -40,7 +41,9 @@
 | Action | How |
 | --- | --- |
 | Move | Drag anywhere on the player |
-| Switch size | Double-arrow button, or double-click the player |
+| Switch view | Double-arrow button or double-click cycles full, compact, vinyl; right-click to pick one directly |
+| Volume | Click or drag the bar on the left, or scroll the mouse wheel over the player |
+| Hide the volume bar | Right-click menu |
 | Always on top | Pin button, or right-click menu |
 | Open Yandex Music | Press play when nothing is playing, or right-click menu |
 | Quit | Close button (full size), or right-click and choose Exit |
@@ -55,6 +58,8 @@ skip commands back.
 That means:
 
 - No account, token or password is ever requested.
+- The volume bar sets the Yandex Music app's own level in the Windows volume mixer. It needs the
+  desktop app and becomes active once the app has started playing.
 - It prefers the Yandex Music desktop app. If that is not running, it controls whatever Windows
   reports as the current media player, such as a browser tab.
 
