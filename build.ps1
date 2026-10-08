@@ -1,8 +1,9 @@
-﻿# Builds dist\YaMiniPlayer.exe using the C# compiler that ships with Windows (no SDK needed).
+﻿# Builds dist\YaMiniPlayer.exe using the C# compiler that ships with Windows (no SDK needed),
+# then packs dist\YaMiniPlayer.zip: the exe, the readme and the install/uninstall scripts.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$fx = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319'
-$md = 'C:\Windows\System32\WinMetadata'
+$fx = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
+$md = Join-Path $env:WINDIR 'System32\WinMetadata'
 $icon = Join-Path $root 'src\app.ico'
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null
@@ -81,3 +82,14 @@ if (-not (Test-Path $icon)) {
     "$root\src\Player.cs"
 if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 "Built $dist\YaMiniPlayer.exe"
+
+# Text files go out with Windows line endings; cmd.exe misreads batch files that lack them
+foreach ($file in 'README.txt', 'installer\Install.cmd', 'installer\Uninstall.cmd') {
+    $text = [System.IO.File]::ReadAllText((Join-Path $root $file)) -replace "`r?`n", "`r`n"
+    $encoding = if ($file -like '*.cmd') { [System.Text.Encoding]::ASCII } else { New-Object System.Text.UTF8Encoding $true }
+    [System.IO.File]::WriteAllText((Join-Path $dist (Split-Path $file -Leaf)), $text, $encoding)
+}
+$zip = Join-Path $dist 'YaMiniPlayer.zip'
+Compress-Archive -Force -DestinationPath $zip -Path `
+    "$dist\YaMiniPlayer.exe", "$dist\README.txt", "$dist\Install.cmd", "$dist\Uninstall.cmd"
+"Packed $zip"

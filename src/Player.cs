@@ -36,23 +36,108 @@ using StreamRef = Windows.Storage.Streams.IRandomAccessStreamReference;
 [assembly: AssemblyTitle("Ya Mini Player")]
 [assembly: AssemblyProduct("Ya Mini Player")]
 [assembly: AssemblyDescription("Tiny floating remote for Yandex Music")]
+[assembly: AssemblyCopyright("Copyright (c) 2026 Ya Mini Player contributors")]
 [assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyInformationalVersion("1.0.0")]
 
 namespace YaMini
 {
     static class Program
     {
+        public static readonly string Version = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
+
         [STAThread]
         static void Main()
         {
             bool first;
             using (new Mutex(true, "YaMiniPlayer.SingleInstance", out first))
             {
-                if (!first) return;
-                var app = new Application();
-                app.ShutdownMode = ShutdownMode.OnMainWindowClose;
-                app.Run(new Player().Window);
+                if (!first) return;   // already running
+
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => Log.Write("Fatal error", e.ExceptionObject as Exception);
+                TaskScheduler.UnobservedTaskException += (s, e) =>
+                {
+                    Log.Write("Background task error", e.Exception);
+                    e.SetObserved();
+                };
+                try
+                {
+                    Log.Write("Started, version " + Version);
+                    if (!MediaControlsAvailable())
+                    {
+                        Log.Write("Windows media controls are missing on this version of Windows");
+                        MessageBox.Show("Ya Mini Player needs Windows 10 (version 1809 or later) or Windows 11.",
+                            "Ya Mini Player", MessageBoxButton.OK, MessageBoxImage.Information);
+                        return;
+                    }
+
+                    var app = new Application();
+                    app.ShutdownMode = ShutdownMode.OnMainWindowClose;
+                    // A failure in one click or one refresh is logged and the player keeps running
+                    app.DispatcherUnhandledException += (s, e) =>
+                    {
+                        Log.Write("Unexpected error", e.Exception);
+                        e.Handled = true;
+                    };
+                    app.Run(new Player().Window);
+                    Log.Write("Closed");
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Could not start", ex);
+                    MessageBox.Show("Ya Mini Player ran into a problem and has to close.\n\nDetails were saved to:\n" + Log.FilePath,
+                        "Ya Mini Player", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             }
+        }
+
+        // The media session API arrived in Windows 10 1809; older systems do not have the type at all
+        static bool MediaControlsAvailable()
+        {
+            try
+            {
+                return Type.GetType("Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows, ContentType=WindowsRuntime", false) != null;
+            }
+            catch (Exception) { return false; }
+        }
+    }
+
+    // Plain-text log next to the settings, for diagnosing problems on someone else's PC
+    static class Log
+    {
+        public static readonly string Folder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "YaMiniPlayer");
+        public static readonly string FilePath = Path.Combine(Folder, "log.txt");
+
+        const long MaxBytes = 256 * 1024;
+        static readonly object gate = new object();
+        static string last;
+
+        public static void Write(string what, Exception error = null)
+        {
+            try
+            {
+                string text = error == null ? what : what + ": " + error;
+                lock (gate)
+                {
+                    // A problem that repeats every second is written once, not thousands of times
+                    if (text == last) return;
+                    last = text;
+
+                    Directory.CreateDirectory(Folder);
+                    var file = new FileInfo(FilePath);
+                    if (file.Exists && file.Length > MaxBytes)
+                    {
+                        string old = Path.Combine(Folder, "log.old.txt");
+                        File.Delete(old);
+                        File.Move(FilePath, old);
+                    }
+                    File.AppendAllText(FilePath,
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "  " + text + Environment.NewLine);
+                }
+            }
+            catch (Exception) { }   // logging must never take the app down
         }
     }
 
@@ -430,6 +515,12 @@ namespace YaMini
             volItem.Click += delegate { SetVolumeBar(volItem.IsChecked); SaveSettings(); };
             topmostItem = new MenuItem { Header = "Always on top", IsCheckable = true, IsChecked = true };
             topmostItem.Click += delegate { SetTopmost(topmostItem.IsChecked); SaveSettings(); };
+            var logItem = new MenuItem { Header = "Open log folder" };
+            logItem.Click += delegate
+            {
+                try { Directory.CreateDirectory(Log.Folder); Process.Start(Log.Folder); }
+                catch (Exception ex) { Log.Write("Could not open the log folder", ex); }
+            };
             var openItem = new MenuItem { Header = "Open Yandex Music" };
             openItem.Click += delegate { LaunchYandexMusic(); };
             var exitItem = new MenuItem { Header = "Exit" };
@@ -441,7 +532,10 @@ namespace YaMini
             menu.Items.Add(topmostItem);
             menu.Items.Add(new Separator());
             menu.Items.Add(openItem);
+            menu.Items.Add(logItem);
             menu.Items.Add(exitItem);
+            menu.Items.Add(new Separator());
+            menu.Items.Add(new MenuItem { Header = "Ya Mini Player " + Program.Version, IsEnabled = false });
             Window.ContextMenu = menu;
 
             // When the view changes size, grow away from the nearest screen edges so it stays on screen
@@ -466,9 +560,9 @@ namespace YaMini
 
             Window.MouseLeftButtonDown += OnMouseDown;
             Window.Closing += delegate { SaveSettings(); };
+            Window.Loaded += delegate { SaveSettings(); };   // creates the settings file on first run
 
-            settingsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "YaMiniPlayer", "settings.txt");
+            settingsPath = Path.Combine(Log.Folder, "settings.txt");
             SetTopmost(true);
             SetMode(Full);
             LoadSettings();
@@ -596,8 +690,8 @@ namespace YaMini
                     else if (key == "topmost") SetTopmost(val == "1");
                 }
             }
-            catch (IOException) { }
-            catch (FormatException) { }
+            catch (IOException) { }   // no settings yet: first run
+            catch (Exception ex) { Log.Write("Settings could not be read, using defaults", ex); }
 
             // Fall back to the bottom-right corner if there is no saved spot or it is off-screen
             bool visible = !double.IsNaN(left) && !double.IsNaN(top)
@@ -630,8 +724,7 @@ namespace YaMini
                     "volbar=" + (volItem.IsChecked ? "1" : "0")
                 });
             }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            catch (Exception ex) { Log.Write("Settings could not be saved", ex); }
         }
 
         // ---- media session ---------------------------------------------------
@@ -667,9 +760,10 @@ namespace YaMini
                 SetText(props.Title, props.Artist, props.AlbumTitle);
                 await UpdateArt(props.Thumbnail);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 // The session can vanish mid-call when the player closes; next tick sorts it out
+                Log.Write("Lost contact with the music player, will retry", ex);
                 session = null;
                 ShowIdle();
             }
@@ -691,7 +785,7 @@ namespace YaMini
         {
             Session s = session;
             if (s == null) { LaunchYandexMusic(); return; }
-            try { await Async.AsTask(s.TryTogglePlayPauseAsync()); } catch (Exception) { }
+            try { await Async.AsTask(s.TryTogglePlayPauseAsync()); } catch (Exception ex) { Log.Write("Play/pause failed", ex); }
             RefreshSoon();
         }
 
@@ -699,7 +793,7 @@ namespace YaMini
         {
             Session s = session;
             if (s == null) return;
-            try { await Async.AsTask(s.TrySkipNextAsync()); } catch (Exception) { }
+            try { await Async.AsTask(s.TrySkipNextAsync()); } catch (Exception ex) { Log.Write("Next failed", ex); }
             RefreshSoon();
         }
 
@@ -707,7 +801,7 @@ namespace YaMini
         {
             Session s = session;
             if (s == null) return;
-            try { await Async.AsTask(s.TrySkipPreviousAsync()); } catch (Exception) { }
+            try { await Async.AsTask(s.TrySkipPreviousAsync()); } catch (Exception ex) { Log.Write("Previous failed", ex); }
             RefreshSoon();
         }
 
@@ -816,7 +910,7 @@ namespace YaMini
                 if (appId != null) Process.Start("explorer.exe", "shell:AppsFolder\\" + appId);
                 else Process.Start("https://music.yandex.ru");
             }
-            catch (Exception) { }
+            catch (Exception ex) { Log.Write("Could not open Yandex Music", ex); }
         }
 
         // Looks through the Start menu's app list for the Yandex Music desktop app

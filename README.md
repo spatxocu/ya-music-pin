@@ -31,7 +31,10 @@
 
 1. Download [YaMiniPlayer.zip](../../raw/main/download/YaMiniPlayer.zip) and unzip it.
 2. Start Yandex Music (the desktop app, or music.yandex.ru in a browser) and play something.
-3. Run `YaMiniPlayer.exe`.
+3. Run `YaMiniPlayer.exe`, or run `Install.cmd` to add Desktop and Start menu shortcuts and an
+   entry under Settings > Apps. No administrator rights needed.
+
+Nothing else has to be installed: the app uses only what already ships with Windows 10 and 11.
 
 > **"Windows protected your PC"?** The app is not code-signed, so SmartScreen warns on first run.
 > Click **More info**, then **Run anyway**. The full source is in this repo if you would rather build it yourself.
@@ -47,6 +50,16 @@
 | Always on top | Pin button, or right-click menu |
 | Open Yandex Music | Press play when nothing is playing, or right-click menu |
 | Quit | Close button (full size), or right-click and choose Exit |
+
+## If something goes wrong
+
+- **"Press play to open"** means Yandex Music is closed or has not played anything yet. Start a
+  track and the player picks it up within a second.
+- **Log:** right-click the player and choose **Open log folder**. `log.txt` records startup,
+  shutdown and any error; `settings.txt` next to it holds position, view and pin state.
+  Both live in `%APPDATA%\YaMiniPlayer`. Delete `settings.txt` to reset the player.
+- **Uninstall:** Settings > Apps > Ya Mini Player, or `Uninstall.cmd`. A portable copy is removed
+  by deleting its folder.
 
 ## How it works
 
@@ -71,13 +84,14 @@ No SDK needed. The build script uses the C# compiler that ships with Windows.
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-The result is `dist\YaMiniPlayer.exe`.
+The result is `dist\YaMiniPlayer.exe` and the shareable `dist\YaMiniPlayer.zip`.
 
 | File | Purpose |
 | --- | --- |
 | `src/Player.cs` | App logic: media session, settings, window behaviour |
 | `src/Player.xaml` | The player's layout and styling |
-| `build.ps1` | Generates the icon and compiles the app |
+| `build.ps1` | Generates the icon, compiles the app and packs the zip |
+| `installer/` | `Install.cmd` and `Uninstall.cmd`, shipped inside the zip |
 
 Requires Windows 10 (1809 or later) or Windows 11.
 
