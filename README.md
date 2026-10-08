@@ -20,6 +20,7 @@
 
 - **Play / pause, next, previous** for whatever Yandex Music is playing
 - **Track title, artist and album art**, with the cover softly blurred into the background
+- **Long names scroll** to the left in a loop instead of being cut off
 - **Always on top**, with a pin button to switch it off (yellow pin = pinned)
 - **Two sizes**: full and compact, one click to switch
 - **Drag it anywhere**; it remembers its place, size and pin state

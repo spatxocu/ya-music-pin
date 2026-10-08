@@ -18,11 +18,14 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Windows.Foundation;
 using Windows.Storage.Streams;
+using Point = System.Windows.Point;
 using Rect = System.Windows.Rect;
+using Size = System.Windows.Size;
 using Manager = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager;
 using Session = Windows.Media.Control.GlobalSystemMediaTransportControlsSession;
 using Status = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionPlaybackStatus;
@@ -67,6 +70,100 @@ namespace YaMini
         }
     }
 
+    struct Part
+    {
+        public readonly string Text;
+        public readonly Brush Brush;
+        public readonly FontWeight Weight;
+
+        public Part(string text, Brush brush, FontWeight weight)
+        {
+            Text = text;
+            Brush = brush;
+            Weight = weight;
+        }
+    }
+
+    // One line of text that scrolls to the left in a loop when it is too wide for its host
+    class Marquee
+    {
+        const double Gap = 40;          // space between the end of the text and its repeat
+        const double Speed = 32;        // pixels per second
+        const double PauseSeconds = 2;  // rest at the start of every lap
+
+        public readonly Canvas Host;
+
+        readonly double fontSize;
+        readonly Canvas strip = new Canvas();
+        readonly TranslateTransform shift = new TranslateTransform();
+        Part[] parts = new Part[0];
+
+        public Marquee(Canvas host, double fontSize)
+        {
+            Host = host;
+            this.fontSize = fontSize;
+            strip.RenderTransform = shift;
+            host.Children.Add(strip);
+            host.SizeChanged += delegate { Layout(); };
+        }
+
+        public void Set(params Part[] newParts)
+        {
+            parts = newParts;
+            Layout();
+        }
+
+        TextBlock Build(bool scrolling)
+        {
+            var block = new TextBlock { FontSize = fontSize };
+            // Pixel-snapped text moves in visible steps, so scrolling text uses ideal metrics
+            if (scrolling) TextOptions.SetTextFormattingMode(block, TextFormattingMode.Ideal);
+            foreach (Part p in parts)
+                block.Inlines.Add(new Run(p.Text) { Foreground = p.Brush, FontWeight = p.Weight });
+            return block;
+        }
+
+        void Layout()
+        {
+            shift.BeginAnimation(TranslateTransform.XProperty, null);
+            shift.X = 0;
+            strip.Children.Clear();
+            Host.OpacityMask = null;
+
+            double room = Host.ActualWidth;
+            if (room <= 0) return;
+
+            TextBlock first = Build(false);
+            first.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double width = first.DesiredSize.Width;
+            if (width <= room)
+            {
+                strip.Children.Add(first);
+                return;
+            }
+
+            // Two copies one lap apart, so the loop restarts without a visible jump
+            first = Build(true);
+            TextBlock second = Build(true);
+            double lap = width + Gap;
+            Canvas.SetLeft(second, lap);
+            strip.Children.Add(first);
+            strip.Children.Add(second);
+
+            var fade = new LinearGradientBrush { StartPoint = new Point(0, 0), EndPoint = new Point(1, 0) };
+            fade.GradientStops.Add(new GradientStop(Colors.Black, 0));
+            fade.GradientStops.Add(new GradientStop(Colors.Black, 0.9));
+            fade.GradientStops.Add(new GradientStop(Colors.Transparent, 1));
+            Host.OpacityMask = fade;
+
+            var slide = new DoubleAnimationUsingKeyFrames { RepeatBehavior = RepeatBehavior.Forever };
+            slide.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+            slide.KeyFrames.Add(new DiscreteDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(PauseSeconds))));
+            slide.KeyFrames.Add(new LinearDoubleKeyFrame(-lap, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(PauseSeconds + lap / Speed))));
+            shift.BeginAnimation(TranslateTransform.XProperty, slide);
+        }
+    }
+
     class Player
     {
         const string PlayGeo = "M3,1 L13,7 L3,13 Z";
@@ -78,8 +175,8 @@ namespace YaMini
         readonly Border art, artC;
         readonly UIElement artNote, artNoteC;
         readonly System.Windows.Shapes.Rectangle backdrop;
-        readonly TextBlock titleText, artistText, lineC;
-        readonly Run titleC, artistC;
+        readonly Marquee titleLine, artistLine, compactLine;
+        string lastTitle, lastArtist;
         readonly System.Windows.Shapes.Path playIcon, playIconC, pinIcon, pinIconC;
         readonly Button pinBtn, pinBtnC;
         readonly MenuItem compactItem, topmostItem;
@@ -103,11 +200,9 @@ namespace YaMini
             artNote = Find<UIElement>("ArtNote");
             artNoteC = Find<UIElement>("ArtNoteC");
             backdrop = Find<System.Windows.Shapes.Rectangle>("Backdrop");
-            titleText = Find<TextBlock>("TitleText");
-            artistText = Find<TextBlock>("ArtistText");
-            lineC = Find<TextBlock>("LineC");
-            titleC = Find<Run>("TitleC");
-            artistC = Find<Run>("ArtistC");
+            titleLine = new Marquee(Find<Canvas>("TitleHost"), 14);
+            artistLine = new Marquee(Find<Canvas>("ArtistHost"), 12);
+            compactLine = new Marquee(Find<Canvas>("LineHost"), 12.5);
             playIcon = Find<System.Windows.Shapes.Path>("PlayIcon");
             playIconC = Find<System.Windows.Shapes.Path>("PlayIconC");
 
@@ -370,21 +465,29 @@ namespace YaMini
         {
             if (string.IsNullOrEmpty(title)) title = "Yandex Music";
             artist = artist ?? "";
-            if (titleText.Text == title && artistText.Text == artist) return;
+            if (lastTitle == title && lastArtist == artist) return;
+            lastTitle = title;
+            lastArtist = artist;
 
-            titleText.Text = title;
-            artistText.Text = artist;
-            titleC.Text = title;
-            artistC.Text = artist.Length > 0 ? "  —  " + artist : "";
+            titleLine.Set(new Part(title, Brushes.White, FontWeights.SemiBold));
+            artistLine.Set(new Part(artist, Dim(0xB3), FontWeights.Normal));
+            compactLine.Set(
+                new Part(title, Brushes.White, FontWeights.SemiBold),
+                new Part(artist.Length > 0 ? "  —  " + artist : "", Dim(0xA6), FontWeights.Normal));
 
             string tip = title;
             if (artist.Length > 0) tip += "\n" + artist;
             if (!string.IsNullOrEmpty(album)) tip += "\n" + album;
-            titleText.ToolTip = tip;
-            artistText.ToolTip = tip;
-            lineC.ToolTip = tip;
+            titleLine.Host.ToolTip = tip;
+            artistLine.Host.ToolTip = tip;
+            compactLine.Host.ToolTip = tip;
             art.ToolTip = tip;
             artC.ToolTip = tip;
+        }
+
+        static Brush Dim(byte alpha)
+        {
+            return new SolidColorBrush(Color.FromArgb(alpha, 0xFF, 0xFF, 0xFF));
         }
 
         async Task UpdateArt(StreamRef thumbnail)
