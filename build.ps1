@@ -75,6 +75,7 @@ if (-not (Test-Path $icon)) {
     "/resource:$root\src\Player.xaml,Player.xaml" `
     "/r:$fx\WPF\PresentationFramework.dll" "/r:$fx\WPF\PresentationCore.dll" "/r:$fx\WPF\WindowsBase.dll" `
     "/r:$fx\System.Xaml.dll" "/r:$fx\System.Core.dll" "/r:$fx\Microsoft.CSharp.dll" `
+    "/r:$fx\System.dll" "/r:$fx\System.Web.Extensions.dll" `
     "/r:$fx\System.Runtime.WindowsRuntime.dll" `
     "/r:$fx\System.Runtime.dll" "/r:$fx\System.Runtime.InteropServices.WindowsRuntime.dll" `
     "/r:$fx\System.Threading.Tasks.dll" `

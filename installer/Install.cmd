@@ -36,7 +36,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$exe = Join-Path $env:LO
 
 rem Entry under Settings - Apps - Installed apps
 reg add "%KEY%" /v DisplayName /d "Ya Mini Player" /f >nul
-reg add "%KEY%" /v DisplayVersion /d "1.0.0" /f >nul
+reg add "%KEY%" /v DisplayVersion /d "1.1.0" /f >nul
 reg add "%KEY%" /v Publisher /d "Ya Mini Player contributors" /f >nul
 reg add "%KEY%" /v DisplayIcon /d "%DEST%\YaMiniPlayer.exe" /f >nul
 reg add "%KEY%" /v InstallLocation /d "%DEST%" /f >nul

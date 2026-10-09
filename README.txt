@@ -1,4 +1,4 @@
-Ya Mini Player 1.0.0
+Ya Mini Player 1.1.0
 ====================
 A tiny always-on-top remote for Yandex Music on Windows 10 / 11.
 
@@ -21,12 +21,17 @@ Controls
 - Previous / Play-Pause / Next buttons
 - Drag anywhere on the player to move it
 - Pin button: yellow upright pin = always on top, tilted outline = normal window
-- Double-arrow button (or double-click the player): switch view, full -> compact -> vinyl
+- Double-arrow button (or double-click the player): switch view, full -> compact -> vinyl -> lyrics
 - Vinyl view: a record with the cover on its label that spins while music plays
+- Lyrics view: the words of the current track. When timed lyrics exist, the line being
+  sung is highlighted and the text follows along. "No lyrics" means none were found.
+  Lyrics come from lrclib.net, a free public lyrics database, not from Yandex, so a few
+  tracks may be missing or differ. This view needs internet, and it sends the track title
+  and artist to that site. Nothing is sent unless you open the lyrics view.
 - Volume bar on the left: click or drag it, or scroll the mouse wheel over the player.
   It changes only Yandex Music's volume, never the computer's master volume.
   It works with the Yandex Music desktop app once it has started playing.
-- Right-click for the menu: Full size / Compact / Vinyl, Volume bar, Always on top,
+- Right-click for the menu: Full size / Compact / Vinyl / Lyrics, Volume bar, Always on top,
   Open Yandex Music, Open log folder, Exit
 - If nothing is playing, the play button opens Yandex Music
 

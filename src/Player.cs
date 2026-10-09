@@ -10,10 +10,14 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -37,9 +41,9 @@ using StreamRef = Windows.Storage.Streams.IRandomAccessStreamReference;
 [assembly: AssemblyProduct("Ya Mini Player")]
 [assembly: AssemblyDescription("Tiny floating remote for Yandex Music")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Ya Mini Player contributors")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
-[assembly: AssemblyInformationalVersion("1.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyInformationalVersion("1.1.0")]
 
 namespace YaMini
 {
@@ -289,6 +293,144 @@ namespace YaMini
         }
     }
 
+    class LyricLine
+    {
+        public double Time;     // seconds from the start of the track; unused for untimed lyrics
+        public string Text;
+    }
+
+    class LyricsResult
+    {
+        public List<LyricLine> Lines;
+        public bool Synced;     // true when every line carries a time
+    }
+
+    // Lyrics come from LRCLIB (lrclib.net), a free public lyrics database. Yandex Music does not
+    // hand its own lyrics to other apps. Only the track title and artist are sent.
+    static class LyricsSource
+    {
+        static readonly Regex Stamp = new Regex(@"^\[(\d+):(\d+(?:[.,]\d+)?)\]\s*(.*)$");
+
+        // Called off the UI thread. Returns null when nothing usable is found.
+        public static LyricsResult Find(string title, string artist, double seconds)
+        {
+            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;   // TLS 1.2
+
+            // The exact-match lookup is the quick, dependable one; the search behind it is the wider net
+            LyricsResult found = seconds > 0 ? Pick(Exact(title, artist, seconds), seconds) : null;
+            if (found != null) return found;
+            found = Pick(Search(title, artist), seconds);
+            if (found != null) return found;
+
+            // Second try without the "(Slowed)" / "[Remix]" style suffix and with the first artist only
+            string plainTitle = Regex.Replace(title, @"\s*[\(\[].*?[\)\]]", "").Trim();
+            string firstArtist = artist.Split(',', '&')[0].Trim();
+            if (plainTitle.Length == 0 || (plainTitle == title && firstArtist == artist)) return null;
+            return Pick(Search(plainTitle, firstArtist), plainTitle == title ? seconds : 0);
+        }
+
+        static List<Dictionary<string, object>> Search(string title, string artist)
+        {
+            string json = Download("https://lrclib.net/api/search?track_name=" + Uri.EscapeDataString(title)
+                + "&artist_name=" + Uri.EscapeDataString(artist));
+            var items = json == null ? null : Parser().Deserialize<List<Dictionary<string, object>>>(json);
+            return items ?? new List<Dictionary<string, object>>();
+        }
+
+        static List<Dictionary<string, object>> Exact(string title, string artist, double seconds)
+        {
+            string json = Download("https://lrclib.net/api/get?track_name=" + Uri.EscapeDataString(title)
+                + "&artist_name=" + Uri.EscapeDataString(artist)
+                + "&duration=" + Math.Round(seconds).ToString(CultureInfo.InvariantCulture));
+            var items = new List<Dictionary<string, object>>();
+            if (json != null) items.Add(Parser().Deserialize<Dictionary<string, object>>(json));
+            return items;
+        }
+
+        static JavaScriptSerializer Parser()
+        {
+            return new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+        }
+
+        // Returns null for "not found". The service answers "busy" fairly often, so other failures
+        // are retried a couple of times before giving up.
+        static string Download(string url)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    var request = (HttpWebRequest)WebRequest.Create(url);
+                    request.UserAgent = "YaMiniPlayer/" + Program.Version + " (https://github.com/spatxocu/ya-music-pin)";
+                    request.Timeout = 15000;
+                    using (WebResponse response = request.GetResponse())
+                    using (var reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                        return reader.ReadToEnd();
+                }
+                catch (WebException ex)
+                {
+                    var reply = ex.Response as HttpWebResponse;
+                    if (reply != null && reply.StatusCode == HttpStatusCode.NotFound) return null;
+                    if (attempt == 3) throw;
+                    Thread.Sleep(1500 * attempt);
+                }
+            }
+        }
+
+        // Timed lyrics are only trusted when the recording is the same length as the one playing;
+        // otherwise the words would light up at the wrong moments, so plain text is used instead.
+        static LyricsResult Pick(List<Dictionary<string, object>> items, double seconds)
+        {
+            Dictionary<string, object> timed = null, plain = null;
+            double timedGap = double.MaxValue, plainGap = double.MaxValue;
+            foreach (var item in items)
+            {
+                double gap = 0;
+                object length;
+                if (seconds > 0)
+                {
+                    // An entry that does not say how long it is cannot be trusted for timing
+                    gap = item.TryGetValue("duration", out length) && length != null
+                        ? Math.Abs(Convert.ToDouble(length, CultureInfo.InvariantCulture) - seconds)
+                        : 999;
+                }
+
+                if (Text(item, "syncedLyrics") != null && gap <= 3 && gap < timedGap) { timed = item; timedGap = gap; }
+                if (Text(item, "plainLyrics") != null && gap < plainGap) { plain = item; plainGap = gap; }
+            }
+
+            if (timed != null)
+            {
+                var lines = new List<LyricLine>();
+                foreach (string raw in Text(timed, "syncedLyrics").Split('\n'))
+                {
+                    Match m = Stamp.Match(raw.Trim());
+                    if (!m.Success || m.Groups[3].Value.Trim().Length == 0) continue;
+                    double time = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) * 60
+                        + double.Parse(m.Groups[2].Value.Replace(',', '.'), CultureInfo.InvariantCulture);
+                    lines.Add(new LyricLine { Time = time, Text = m.Groups[3].Value.Trim() });
+                }
+                if (lines.Count > 0) return new LyricsResult { Lines = lines, Synced = true };
+            }
+
+            if (plain != null)
+            {
+                var lines = new List<LyricLine>();
+                foreach (string raw in Text(plain, "plainLyrics").Split('\n'))
+                    lines.Add(new LyricLine { Text = raw.Trim() });
+                return new LyricsResult { Lines = lines, Synced = false };
+            }
+            return null;
+        }
+
+        static string Text(Dictionary<string, object> item, string key)
+        {
+            object value;
+            string text = item.TryGetValue(key, out value) ? value as string : null;
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+    }
+
     struct Part
     {
         public readonly string Text;
@@ -393,13 +535,27 @@ namespace YaMini
 
         public readonly Window Window;
 
-        const int Full = 0, Compact = 1, Vinyl = 2;
-        static readonly string[] ModeNames = { "full", "compact", "vinyl" };
+        const int Full = 0, Compact = 1, Vinyl = 2, LyricsMode = 3;
+        static readonly string[] ModeNames = { "full", "compact", "vinyl", "lyrics" };
 
         readonly FrameworkElement[] views;
         readonly FrameworkElement volBar;
         readonly RowDefinition volEmpty, volFull;
-        readonly Border art, artC;
+        readonly Border art, artC, artL;
+        readonly Marquee titleLineL, artistLineL;
+        readonly ScrollViewer lyricScroll;
+        readonly StackPanel lyricPanel;
+        readonly TextBlock lyricStatus;
+        readonly DispatcherTimer lyricTimer;
+        List<LyricLine> lyrics;         // null while there is nothing to show
+        bool lyricsSynced;
+        int lyricIndex = -1;
+        double lyricTarget = -1;        // scroll offset the view is easing towards
+        string trackKey = "", lyricsKey, lyricRetryKey;
+        int missedSessions;             // refreshes in a row that found no player
+        string trackTitle = "", trackArtist = "";
+        TimeSpan position, duration;    // as last reported by the player
+        DateTimeOffset positionStamp;
         readonly System.Windows.Shapes.Ellipse discArt;
         readonly UIElement[] artNotes;
         readonly System.Windows.Shapes.Rectangle backdrop;
@@ -428,12 +584,24 @@ namespace YaMini
 
             views = new[]
             {
-                Find<FrameworkElement>("NormalView"), Find<FrameworkElement>("CompactView"), Find<FrameworkElement>("VinylView")
+                Find<FrameworkElement>("NormalView"), Find<FrameworkElement>("CompactView"), Find<FrameworkElement>("VinylView"),
+                Find<FrameworkElement>("LyricsView")
             };
             art = Find<Border>("Art");
             artC = Find<Border>("ArtC");
             discArt = Find<System.Windows.Shapes.Ellipse>("DiscArt");
-            artNotes = new[] { Find<UIElement>("ArtNote"), Find<UIElement>("ArtNoteC"), Find<UIElement>("ArtNoteV") };
+            artL = Find<Border>("ArtL");
+            artNotes = new[]
+            {
+                Find<UIElement>("ArtNote"), Find<UIElement>("ArtNoteC"), Find<UIElement>("ArtNoteV"), Find<UIElement>("ArtNoteL")
+            };
+            titleLineL = new Marquee(Find<Canvas>("TitleHostL"), 13, false);
+            artistLineL = new Marquee(Find<Canvas>("ArtistHostL"), 11.5, false);
+            lyricScroll = Find<ScrollViewer>("LyricScroll");
+            lyricPanel = Find<StackPanel>("LyricPanel");
+            lyricStatus = Find<TextBlock>("LyricStatus");
+            lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+            lyricTimer.Tick += delegate { FollowLyrics(); };
             backdrop = Find<System.Windows.Shapes.Rectangle>("Backdrop");
             titleLine = new Marquee(Find<Canvas>("TitleHost"), 14, false);
             artistLine = new Marquee(Find<Canvas>("ArtistHost"), 12, false);
@@ -443,16 +611,16 @@ namespace YaMini
             playIcons = new[]
             {
                 Find<System.Windows.Shapes.Path>("PlayIcon"), Find<System.Windows.Shapes.Path>("PlayIconC"),
-                Find<System.Windows.Shapes.Path>("PlayIconV")
+                Find<System.Windows.Shapes.Path>("PlayIconV"), Find<System.Windows.Shapes.Path>("PlayIconL")
             };
             pinIcons = new[]
             {
                 Find<System.Windows.Shapes.Path>("PinIcon"), Find<System.Windows.Shapes.Path>("PinIconC"),
-                Find<System.Windows.Shapes.Path>("PinIconV")
+                Find<System.Windows.Shapes.Path>("PinIconV"), Find<System.Windows.Shapes.Path>("PinIconL")
             };
-            pinBtns = new[] { Find<Button>("PinBtn"), Find<Button>("PinBtnC"), Find<Button>("PinBtnV") };
+            pinBtns = new[] { Find<Button>("PinBtn"), Find<Button>("PinBtnC"), Find<Button>("PinBtnV"), Find<Button>("PinBtnL") };
 
-            foreach (string suffix in new[] { "", "C", "V" })
+            foreach (string suffix in new[] { "", "C", "V", "L" })
             {
                 Find<Button>("PrevBtn" + suffix).Click += OnPrev;
                 Find<Button>("NextBtn" + suffix).Click += OnNext;
@@ -462,7 +630,9 @@ namespace YaMini
             // The size button in each view leads to the next one: full -> compact -> vinyl -> full
             Find<Button>("CompactBtn").Click += delegate { SetMode(Compact); SaveSettings(); };
             Find<Button>("ExpandBtn").Click += delegate { SetMode(Vinyl); SaveSettings(); };
-            Find<Button>("ModeBtnV").Click += delegate { SetMode(Full); SaveSettings(); };
+            Find<Button>("ModeBtnV").Click += delegate { SetMode(LyricsMode); SaveSettings(); };
+            Find<Button>("ModeBtnL").Click += delegate { SetMode(Full); SaveSettings(); };
+            Find<Button>("CloseBtnL").Click += delegate { Window.Close(); };
             Find<Button>("CloseBtn").Click += delegate { Window.Close(); };
             Find<Button>("CloseBtnV").Click += delegate { Window.Close(); };
 
@@ -504,7 +674,8 @@ namespace YaMini
 
             modeItems = new[]
             {
-                new MenuItem { Header = "Full size" }, new MenuItem { Header = "Compact" }, new MenuItem { Header = "Vinyl" }
+                new MenuItem { Header = "Full size" }, new MenuItem { Header = "Compact" }, new MenuItem { Header = "Vinyl" },
+                new MenuItem { Header = "Lyrics" }
             };
             for (int i = 0; i < modeItems.Length; i++)
             {
@@ -601,6 +772,125 @@ namespace YaMini
                 modeItems[i].IsChecked = i == value;
             }
             UpdateSpin();
+
+            // Lyrics are only looked up while their view is open
+            if (mode == LyricsMode)
+            {
+                lyricTimer.Start();
+                if (lyricsKey != trackKey) LoadLyrics();
+            }
+            else lyricTimer.Stop();
+        }
+
+        // ---- lyrics ----------------------------------------------------------
+
+        async void LoadLyrics()
+        {
+            string key = trackKey, title = trackTitle, artist = trackArtist;
+            lyricsKey = key;
+            if (session == null) { ShowLyrics(null, "No lyrics"); return; }
+            ShowLyrics(null, "Looking for lyrics…");
+            bool failed = false;
+            try
+            {
+                // Give the player a moment to report the new track's length; it picks the right version
+                await Task.Delay(800);
+                if (key != trackKey) return;
+                double seconds = duration.TotalSeconds;
+                LyricsResult found = await Task.Run(() => LyricsSource.Find(title, artist, seconds));
+                if (key != trackKey) return;   // the track changed while we were looking
+                if (found == null) ShowLyrics(null, "No lyrics");
+                else ShowLyrics(found, null);
+            }
+            catch (Exception ex)
+            {
+                // Offline or the lyrics service is down: say so, and look again next time the view opens
+                Log.Write("Lyrics lookup failed", ex);
+                if (key == trackKey)
+                {
+                    ShowLyrics(null, "Lyrics unavailable right now");
+                    lyricsKey = null;
+                    failed = true;
+                }
+            }
+
+            // The lyrics service is often busy for a few seconds; try each track once more on its own
+            if (failed && lyricRetryKey != key)
+            {
+                lyricRetryKey = key;
+                await Task.Delay(15000);
+                if (key == trackKey && lyricsKey == null && mode == LyricsMode) LoadLyrics();
+            }
+        }
+
+        void ShowLyrics(LyricsResult result, string status)
+        {
+            lyrics = result == null ? null : result.Lines;
+            lyricsSynced = result != null && result.Synced;
+            lyricIndex = -1;
+            lyricTarget = -1;
+            lyricPanel.Children.Clear();
+            lyricStatus.Text = status ?? "";
+            lyricScroll.ScrollToVerticalOffset(0);
+            if (lyrics == null) return;
+
+            // Timed lyrics get room above and below so the first and last lines can sit in the middle
+            lyricPanel.Margin = lyricsSynced ? new Thickness(0, 100, 0, 100) : new Thickness(0, 10, 0, 10);
+            foreach (LyricLine line in lyrics)
+            {
+                lyricPanel.Children.Add(new TextBlock
+                {
+                    Text = line.Text,
+                    TextWrapping = TextWrapping.Wrap,
+                    FontSize = 14,
+                    Margin = new Thickness(0, 5, 0, 5),
+                    Foreground = lyricsSynced ? Dim(0x66) : Dim(0xD9)
+                });
+            }
+        }
+
+        // Runs many times a second in the lyrics view: lights up the line being sung and glides to it
+        void FollowLyrics()
+        {
+            if (lyrics == null || !lyricsSynced) return;
+
+            // The player reports its position only now and then, so count on from the last report
+            double now = position.TotalSeconds;
+            if (playing) now += (DateTimeOffset.Now - positionStamp).TotalSeconds;
+
+            int index = -1;
+            for (int i = 0; i < lyrics.Count && lyrics[i].Time <= now + 0.15; i++) index = i;
+
+            if (index != lyricIndex)
+            {
+                if (lyricIndex >= 0) Highlight(lyricIndex, false);
+                lyricIndex = index;
+                lyricTarget = 0;
+                if (index >= 0)
+                {
+                    Highlight(index, true);
+                    lyricPanel.UpdateLayout();
+                    var line = (FrameworkElement)lyricPanel.Children[index];
+                    if (line.IsVisible)
+                    {
+                        double top = line.TransformToAncestor(lyricScroll).Transform(new Point(0, 0)).Y;
+                        lyricTarget = lyricScroll.VerticalOffset + top + line.ActualHeight / 2 - lyricScroll.ViewportHeight / 2;
+                    }
+                }
+                lyricTarget = Math.Max(0, Math.Min(lyricTarget, lyricScroll.ScrollableHeight));
+            }
+
+            if (lyricTarget < 0) return;
+            double gap = lyricTarget - lyricScroll.VerticalOffset;
+            if (Math.Abs(gap) < 0.5) lyricTarget = -1;
+            else lyricScroll.ScrollToVerticalOffset(lyricScroll.VerticalOffset + gap * 0.15);
+        }
+
+        void Highlight(int index, bool current)
+        {
+            var line = (TextBlock)lyricPanel.Children[index];
+            line.Foreground = current ? Brushes.White : Dim(0x66);
+            line.FontWeight = current ? FontWeights.SemiBold : FontWeights.Normal;
         }
 
         void UpdateSpin()
@@ -752,11 +1042,24 @@ namespace YaMini
             {
                 if (manager == null) manager = await Async.AsTask(Manager.RequestAsync());
                 session = PickSession();
-                if (session == null) { ShowIdle(); return; }
+                if (session == null)
+                {
+                    // The player drops out for a moment between tracks; only a lasting absence counts as idle
+                    if (++missedSessions >= 3) ShowIdle();
+                    return;
+                }
+                missedSessions = 0;
 
                 var props = await Async.AsTask(session.TryGetMediaPropertiesAsync());
                 var info = session.GetPlaybackInfo();
                 SetPlaying(info != null && info.PlaybackStatus == Status.Playing);
+                var timeline = session.GetTimelineProperties();
+                if (timeline != null)
+                {
+                    position = timeline.Position - timeline.StartTime;
+                    duration = timeline.EndTime - timeline.StartTime;
+                    positionStamp = timeline.LastUpdatedTime;
+                }
                 SetText(props.Title, props.Artist, props.AlbumTitle);
                 await UpdateArt(props.Thumbnail);
             }
@@ -842,8 +1145,15 @@ namespace YaMini
             if (!string.IsNullOrEmpty(album)) tip += "\n" + album;
             titleLineV.Set(new Part(title, Brushes.White, FontWeights.SemiBold));
             artistLineV.Set(new Part(artist, Dim(0xB3), FontWeights.Normal));
+            titleLineL.Set(new Part(title, Brushes.White, FontWeights.SemiBold));
+            artistLineL.Set(new Part(artist, Dim(0xB3), FontWeights.Normal));
 
-            foreach (Marquee line in new[] { titleLine, artistLine, compactLine, titleLineV, artistLineV })
+            trackTitle = title;
+            trackArtist = artist;
+            trackKey = title + "\n" + artist;
+            if (mode == LyricsMode) LoadLyrics();
+
+            foreach (Marquee line in new[] { titleLine, artistLine, compactLine, titleLineV, artistLineV, titleLineL, artistLineL })
                 line.Host.ToolTip = tip;
             art.ToolTip = tip;
             artC.ToolTip = tip;
@@ -894,6 +1204,7 @@ namespace YaMini
             Brush cover = image == null ? null : new ImageBrush(image) { Stretch = Stretch.UniformToFill };
             art.Background = cover ?? placeholder;
             artC.Background = cover ?? placeholder;
+            artL.Background = cover ?? placeholder;
             discArt.Fill = cover ?? placeholder;
             backdrop.Fill = cover;
             foreach (UIElement note in artNotes)

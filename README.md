@@ -22,7 +22,8 @@
 - **Track title, artist and album art**, with the cover softly blurred into the background
 - **Long names scroll** to the left in a loop instead of being cut off
 - **Always on top**, with a pin button to switch it off (yellow pin = pinned)
-- **Three views**: full, compact, and vinyl, where a record with the cover on its label spins while music plays
+- **Four views**: full, compact, vinyl (a record with the cover on its label spins while music plays) and lyrics
+- **Lyrics** that follow the song: the line being sung is highlighted when timed lyrics exist
 - **Volume bar** for Yandex Music alone; the computer's master volume is never touched
 - **Drag it anywhere**; it remembers its place, size and pin state
 - **One small `.exe`**: nothing to install, nothing running in the background
@@ -44,7 +45,7 @@ Nothing else has to be installed: the app uses only what already ships with Wind
 | Action | How |
 | --- | --- |
 | Move | Drag anywhere on the player |
-| Switch view | Double-arrow button or double-click cycles full, compact, vinyl; right-click to pick one directly |
+| Switch view | The view button or a double-click cycles full, compact, vinyl, lyrics; right-click to pick one directly |
 | Volume | Click or drag the bar on the left, or scroll the mouse wheel over the player |
 | Hide the volume bar | Right-click menu |
 | Always on top | Pin button, or right-click menu |
@@ -63,7 +64,7 @@ Nothing else has to be installed: the app uses only what already ships with Wind
 
 ## How it works
 
-Ya Mini Player never talks to Yandex. It uses the same Windows media controls that power the
+Ya Mini Player never talks to Yandex's servers. It uses the same Windows media controls that power the
 volume flyout and your keyboard's media keys (`GlobalSystemMediaTransportControlsSessionManager`).
 Yandex Music tells Windows what is playing; the mini player reads that and sends play, pause and
 skip commands back.
@@ -71,6 +72,10 @@ skip commands back.
 That means:
 
 - No account, token or password is ever requested.
+- Lyrics are the one exception to "never talks to the internet". Yandex Music does not hand its
+  lyrics to other apps, so the lyrics view asks [LRCLIB](https://lrclib.net), a free public lyrics
+  database, sending only the track title and artist. Nothing is sent unless that view is open.
+  Some tracks are missing there, and those show "No lyrics".
 - The volume bar sets the Yandex Music app's own level in the Windows volume mixer. It needs the
   desktop app and becomes active once the app has started playing.
 - It prefers the Yandex Music desktop app. If that is not running, it controls whatever Windows

@@ -207,10 +207,72 @@
               </Button>
             </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-              <Button x:Name="ModeBtnV" Style="{StaticResource HoverBtn}" ToolTip="Full size">
-                <Path Stroke="#CCFFFFFF" StrokeThickness="1.5" Data="M1,1 L5,5 L9,1 M1,6 L5,10 L9,6"/>
+              <Button x:Name="ModeBtnV" Style="{StaticResource HoverBtn}" ToolTip="Lyrics">
+                <Path Stroke="#CCFFFFFF" StrokeThickness="1.5" Data="M1,2 H9 M1,5.5 H9 M1,9 H6"/>
               </Button>
               <Button x:Name="CloseBtnV" Style="{StaticResource HoverBtn}" ToolTip="Close">
+                <Path Stroke="#CCFFFFFF" StrokeThickness="1.5" Data="M1,1 L9,9 M9,1 L1,9"/>
+              </Button>
+            </StackPanel>
+          </Grid>
+        </Grid>
+
+        <!-- Lyrics view: the words of the current track, following along when they are timed -->
+        <Grid x:Name="LyricsView" Width="300" Height="340" Visibility="Collapsed">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <Grid Margin="12,12,12,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border x:Name="ArtL" Width="40" Height="40" CornerRadius="7" Background="#FF2A2A2E">
+              <TextBlock x:Name="ArtNoteL" Text="&#x266A;" FontSize="18" Foreground="#66FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+              <Canvas x:Name="TitleHostL" Height="18" ClipToBounds="True" Background="Transparent"/>
+              <Canvas x:Name="ArtistHostL" Height="16" ClipToBounds="True" Background="Transparent"/>
+            </StackPanel>
+          </Grid>
+          <Grid Grid.Row="1" Margin="16,8,16,0">
+            <ScrollViewer x:Name="LyricScroll" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+              <!-- Lines fade out towards the top and bottom edges -->
+              <ScrollViewer.OpacityMask>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                  <GradientStop Color="Transparent" Offset="0"/>
+                  <GradientStop Color="Black" Offset="0.12"/>
+                  <GradientStop Color="Black" Offset="0.88"/>
+                  <GradientStop Color="Transparent" Offset="1"/>
+                </LinearGradientBrush>
+              </ScrollViewer.OpacityMask>
+              <StackPanel x:Name="LyricPanel"/>
+            </ScrollViewer>
+            <TextBlock x:Name="LyricStatus" FontSize="13" Foreground="#80FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Grid>
+          <Grid Grid.Row="2" Margin="10,6,10,10">
+            <Button x:Name="PinBtnL" Style="{StaticResource HoverBtn}" HorizontalAlignment="Left">
+              <Path x:Name="PinIconL" StrokeThickness="1.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0.5"
+                    Data="M3,1 H9 V2 H8 V6 L10,8 V9 H6.5 V13 H5.5 V9 H2 V8 L4,6 V2 H3 Z"/>
+            </Button>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+              <Button x:Name="PrevBtnL" Style="{StaticResource Btn}" ToolTip="Previous">
+                <Path Fill="White" Data="M13,1 L5,7 L13,13 Z M1,1 H4 V13 H1 Z"/>
+              </Button>
+              <Button x:Name="PlayBtnL" Style="{StaticResource Btn}" Width="32" Height="32" Margin="4,0" ToolTip="Play / Pause">
+                <Path x:Name="PlayIconL" Fill="White" Data="M3,1 L13,7 L3,13 Z"/>
+              </Button>
+              <Button x:Name="NextBtnL" Style="{StaticResource Btn}" ToolTip="Next">
+                <Path Fill="White" Data="M1,1 L9,7 L1,13 Z M10,1 H13 V13 H10 Z"/>
+              </Button>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+              <Button x:Name="ModeBtnL" Style="{StaticResource HoverBtn}" ToolTip="Full size">
+                <Path Stroke="#CCFFFFFF" StrokeThickness="1.5" Data="M1,1 L5,5 L9,1 M1,6 L5,10 L9,6"/>
+              </Button>
+              <Button x:Name="CloseBtnL" Style="{StaticResource HoverBtn}" ToolTip="Close">
                 <Path Stroke="#CCFFFFFF" StrokeThickness="1.5" Data="M1,1 L9,9 M9,1 L1,9"/>
               </Button>
             </StackPanel>
