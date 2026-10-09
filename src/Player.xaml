@@ -248,7 +248,8 @@
                   <GradientStop Color="Transparent" Offset="1"/>
                 </LinearGradientBrush>
               </ScrollViewer.OpacityMask>
-              <StackPanel x:Name="LyricPanel"/>
+              <!-- Ideal metrics and animated hinting let the text glide between pixels instead of jumping -->
+              <StackPanel x:Name="LyricPanel" TextOptions.TextFormattingMode="Ideal" TextOptions.TextHintingMode="Animated"/>
             </ScrollViewer>
             <TextBlock x:Name="LyricStatus" FontSize="13" Foreground="#80FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Grid>

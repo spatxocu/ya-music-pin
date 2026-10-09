@@ -549,8 +549,12 @@ namespace YaMini
         readonly DispatcherTimer lyricTimer;
         List<LyricLine> lyrics;         // null while there is nothing to show
         bool lyricsSynced;
-        int lyricIndex = -1;
-        double lyricTarget = -1;        // scroll offset the view is easing towards
+        int lyricIndex = NotPlaced;
+        const int NotPlaced = -2;       // lyrics are loaded but not yet positioned in the view
+        static readonly Color LyricDim = Color.FromArgb(0x59, 0xFF, 0xFF, 0xFF);
+        static readonly Duration LyricGlide = new Duration(TimeSpan.FromMilliseconds(600));
+        static readonly Duration LyricFade = new Duration(TimeSpan.FromMilliseconds(350));
+        readonly TranslateTransform lyricShift = new TranslateTransform();
         string trackKey = "", lyricsKey, lyricRetryKey;
         int missedSessions;             // refreshes in a row that found no player
         string trackTitle = "", trackArtist = "";
@@ -600,7 +604,16 @@ namespace YaMini
             lyricScroll = Find<ScrollViewer>("LyricScroll");
             lyricPanel = Find<StackPanel>("LyricPanel");
             lyricStatus = Find<TextBlock>("LyricStatus");
-            lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+            lyricPanel.RenderTransform = lyricShift;
+            // Timed lyrics are moved by the app, so the wheel keeps its usual job there (volume);
+            // untimed lyrics are scrolled by hand
+            lyricScroll.PreviewMouseWheel += delegate(object s, MouseWheelEventArgs e)
+            {
+                if (!lyricsSynced) return;
+                e.Handled = true;
+                if (volLevel >= 0) SetVolume(volLevel + (e.Delta > 0 ? 0.05 : -0.05));
+            };
+            lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
             lyricTimer.Tick += delegate { FollowLyrics(); };
             backdrop = Find<System.Windows.Shapes.Rectangle>("Backdrop");
             titleLine = new Marquee(Find<Canvas>("TitleHost"), 14, false);
@@ -827,70 +840,72 @@ namespace YaMini
         {
             lyrics = result == null ? null : result.Lines;
             lyricsSynced = result != null && result.Synced;
-            lyricIndex = -1;
-            lyricTarget = -1;
+            lyricIndex = NotPlaced;
             lyricPanel.Children.Clear();
             lyricStatus.Text = status ?? "";
+            lyricShift.BeginAnimation(TranslateTransform.YProperty, null);
+            lyricShift.Y = 0;
             lyricScroll.ScrollToVerticalOffset(0);
             if (lyrics == null) return;
 
-            // Timed lyrics get room above and below so the first and last lines can sit in the middle
-            lyricPanel.Margin = lyricsSynced ? new Thickness(0, 100, 0, 100) : new Thickness(0, 10, 0, 10);
+            lyricPanel.Margin = lyricsSynced ? new Thickness(0) : new Thickness(0, 10, 0, 10);
             foreach (LyricLine line in lyrics)
             {
                 lyricPanel.Children.Add(new TextBlock
                 {
                     Text = line.Text,
                     TextWrapping = TextWrapping.Wrap,
-                    FontSize = 14,
-                    Margin = new Thickness(0, 5, 0, 5),
-                    Foreground = lyricsSynced ? Dim(0x66) : Dim(0xD9)
+                    FontSize = lyricsSynced ? 16 : 14,
+                    FontWeight = lyricsSynced ? FontWeights.SemiBold : FontWeights.Normal,
+                    Margin = lyricsSynced ? new Thickness(0, 7, 0, 7) : new Thickness(0, 5, 0, 5),
+                    // Each line owns its brush so its colour can fade on its own
+                    Foreground = new SolidColorBrush(lyricsSynced ? LyricDim : Color.FromArgb(0xD9, 0xFF, 0xFF, 0xFF))
                 });
             }
         }
 
-        // Runs many times a second in the lyrics view: lights up the line being sung and glides to it
+        // Checked many times a second in the lyrics view. When the sung line changes, the new line
+        // fades to white and the whole text glides so that line sits in the middle.
         void FollowLyrics()
         {
-            if (lyrics == null || !lyricsSynced) return;
+            if (lyrics == null || !lyricsSynced || lyricScroll.ActualHeight == 0) return;
 
             // The player reports its position only now and then, so count on from the last report
             double now = position.TotalSeconds;
             if (playing) now += (DateTimeOffset.Now - positionStamp).TotalSeconds;
 
             int index = -1;
-            for (int i = 0; i < lyrics.Count && lyrics[i].Time <= now + 0.15; i++) index = i;
+            for (int i = 0; i < lyrics.Count && lyrics[i].Time <= now + 0.2; i++) index = i;
+            if (index == lyricIndex) return;
 
-            if (index != lyricIndex)
+            bool firstPlacement = lyricIndex == NotPlaced;
+            if (lyricIndex >= 0) Fade(lyricIndex, LyricDim);
+            lyricIndex = index;
+            if (index >= 0) Fade(index, Colors.White);
+
+            // Before the first line is sung it waits in the middle, like any other current line
+            lyricPanel.UpdateLayout();
+            var line = (FrameworkElement)lyricPanel.Children[Math.Max(index, 0)];
+            double middle = line.TranslatePoint(new Point(0, 0), lyricPanel).Y + line.ActualHeight / 2;
+            double target = Math.Round(lyricScroll.ActualHeight / 2 - middle);   // whole pixels keep resting text sharp
+
+            if (firstPlacement)
             {
-                if (lyricIndex >= 0) Highlight(lyricIndex, false);
-                lyricIndex = index;
-                lyricTarget = 0;
-                if (index >= 0)
-                {
-                    Highlight(index, true);
-                    lyricPanel.UpdateLayout();
-                    var line = (FrameworkElement)lyricPanel.Children[index];
-                    if (line.IsVisible)
-                    {
-                        double top = line.TransformToAncestor(lyricScroll).Transform(new Point(0, 0)).Y;
-                        lyricTarget = lyricScroll.VerticalOffset + top + line.ActualHeight / 2 - lyricScroll.ViewportHeight / 2;
-                    }
-                }
-                lyricTarget = Math.Max(0, Math.Min(lyricTarget, lyricScroll.ScrollableHeight));
+                lyricShift.BeginAnimation(TranslateTransform.YProperty, null);
+                lyricShift.Y = target;
+                return;
             }
-
-            if (lyricTarget < 0) return;
-            double gap = lyricTarget - lyricScroll.VerticalOffset;
-            if (Math.Abs(gap) < 0.5) lyricTarget = -1;
-            else lyricScroll.ScrollToVerticalOffset(lyricScroll.VerticalOffset + gap * 0.15);
+            // Animating the transform lets WPF move the text every frame, instead of in timer-sized steps
+            lyricShift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(target, LyricGlide)
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            });
         }
 
-        void Highlight(int index, bool current)
+        void Fade(int index, Color colour)
         {
-            var line = (TextBlock)lyricPanel.Children[index];
-            line.Foreground = current ? Brushes.White : Dim(0x66);
-            line.FontWeight = current ? FontWeights.SemiBold : FontWeights.Normal;
+            var brush = (SolidColorBrush)((TextBlock)lyricPanel.Children[index]).Foreground;
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(colour, LyricFade));
         }
 
         void UpdateSpin()
