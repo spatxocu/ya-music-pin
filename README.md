@@ -49,7 +49,7 @@ Nothing else has to be installed: the app uses only what already ships with Wind
 | Switch view | The view button or a double-click cycles full, compact, vinyl, lyrics; right-click to pick one directly |
 | Volume | Click or drag the bar on the left, or scroll the mouse wheel over the player |
 | Hide the volume bar | Right-click menu |
-| Sound mode | Right-click > Sound > Normal, Club or Hall |
+| Sound mode | The bars button next to the pin cycles Normal, Club, Hall (yellow = on); also right-click > Sound |
 | Always on top | Pin button, or right-click menu |
 | Open Yandex Music | Press play when nothing is playing, or right-click menu |
 | Quit | Close button (full size), or right-click and choose Exit |

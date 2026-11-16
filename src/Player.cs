@@ -597,6 +597,10 @@ namespace YaMini
         int soundMode;
         float pendingRestore = -1;      // Yandex Music level still to put back after a sound mode
         MenuItem[] soundItems;
+        Button[] soundBtns;
+        System.Windows.Shapes.Path[] soundIcons;
+        FrameworkElement toast;
+        TextBlock toastText;
         double volLevel = -1;
         long artHash = -1;
 
@@ -651,6 +655,24 @@ namespace YaMini
                 Find<System.Windows.Shapes.Path>("PinIconV"), Find<System.Windows.Shapes.Path>("PinIconL")
             };
             pinBtns = new[] { Find<Button>("PinBtn"), Find<Button>("PinBtnC"), Find<Button>("PinBtnV"), Find<Button>("PinBtnL") };
+
+            soundBtns = new Button[4];
+            soundIcons = new System.Windows.Shapes.Path[4];
+            string[] suffixes = { "", "C", "V", "L" };
+            for (int i = 0; i < suffixes.Length; i++)
+            {
+                soundBtns[i] = Find<Button>("SoundBtn" + suffixes[i]);
+                soundIcons[i] = Find<System.Windows.Shapes.Path>("SoundIcon" + suffixes[i]);
+                // Each click moves to the next sound: Normal -> Club -> Hall -> Normal
+                soundBtns[i].Click += delegate
+                {
+                    SetSound((soundMode + 1) % Effects.Labels.Length);
+                    SaveSettings();
+                    ShowToast(soundMode == Effects.Normal ? "Normal sound" : Effects.Labels[soundMode] + " sound");
+                };
+            }
+            toast = Find<FrameworkElement>("Toast");
+            toastText = Find<TextBlock>("ToastText");
 
             foreach (string suffix in new[] { "", "C", "V", "L" })
             {
@@ -721,7 +743,12 @@ namespace YaMini
             {
                 int target = i;
                 soundItems[i] = new MenuItem { Header = soundHeaders[i], IsCheckable = true };
-                soundItems[i].Click += delegate { SetSound(target); SaveSettings(); };
+                soundItems[i].Click += delegate
+                {
+                    SetSound(target);
+                    SaveSettings();
+                    ShowToast(target == Effects.Normal ? "Normal sound" : Effects.Labels[target] + " sound");
+                };
                 soundMenu.Items.Add(soundItems[i]);
             }
             sound.Failed += delegate
@@ -969,6 +996,16 @@ namespace YaMini
         {
             soundMode = value;
             for (int i = 0; i < soundItems.Length; i++) soundItems[i].IsChecked = i == value;
+
+            // The sound button lights up yellow while Club or Hall is on, like the pin
+            bool on = value != Effects.Normal;
+            string next = Effects.Labels[(value + 1) % Effects.Labels.Length];
+            for (int i = 0; i < soundBtns.Length; i++)
+            {
+                soundIcons[i].Fill = on ? new SolidColorBrush(Color.FromRgb(0xFF, 0xCC, 0x00)) : Dim(0xCC);
+                soundBtns[i].ToolTip = "Sound: " + Effects.Labels[value] + " (click for " + next + ")";
+                if (on) soundBtns[i].Opacity = 1; else soundBtns[i].ClearValue(UIElement.OpacityProperty);
+            }
             if (value == Effects.Normal)
             {
                 if (sound.Running && !sound.Stop()) pendingRestore = sound.Volume;
@@ -984,6 +1021,17 @@ namespace YaMini
                 sound.Start(value);
             }
             ReadVolume();
+        }
+
+        // A label that appears in the middle of the player for a moment
+        void ShowToast(string text)
+        {
+            toastText.Text = text;
+            var fade = new DoubleAnimationUsingKeyFrames();
+            fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(150))));
+            fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1400))));
+            fade.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1800))));
+            toast.BeginAnimation(UIElement.OpacityProperty, fade);
         }
 
         void SetVolumeBar(bool visible)

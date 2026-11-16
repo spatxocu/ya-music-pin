@@ -57,6 +57,10 @@
           </Rectangle.Effect>
         </Rectangle>
 
+        <Border x:Name="Toast" Panel.ZIndex="10" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0" IsHitTestVisible="False"
+                Background="#E6000000" CornerRadius="8" Padding="12,5">
+          <TextBlock x:Name="ToastText" Foreground="White" FontSize="13" FontWeight="SemiBold"/>
+        </Border>
         <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto"/>
@@ -106,6 +110,9 @@
                 </Button>
               </StackPanel>
               <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+<Button x:Name="SoundBtn" Style="{StaticResource HoverBtn}">
+                  <Path x:Name="SoundIcon" Fill="#CCFFFFFF" Data="M0,5 H2 V11 H0 Z M3.5,2 H5.5 V11 H3.5 Z M7,0 H9 V11 H7 Z M10.5,4 H12.5 V11 H10.5 Z"/>
+                </Button>
                 <Button x:Name="PinBtn" Style="{StaticResource HoverBtn}">
                   <Path x:Name="PinIcon" StrokeThickness="1.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0.5"
                         Data="M3,1 H9 V2 H8 V6 L10,8 V9 H6.5 V13 H5.5 V9 H2 V8 L4,6 V2 H3 Z"/>
@@ -142,7 +149,10 @@
             <Button x:Name="NextBtnC" Style="{StaticResource Btn}" Width="24" Height="24" ToolTip="Next">
               <Path Fill="White" Data="M1,1 L7.5,6 L1,11 Z M8.5,1 H11 V11 H8.5 Z"/>
             </Button>
-            <Button x:Name="PinBtnC" Style="{StaticResource HoverBtn}" Margin="6,0,0,0">
+<Button x:Name="SoundBtnC" Style="{StaticResource HoverBtn}" Margin="6,0,0,0">
+              <Path x:Name="SoundIconC" Fill="#CCFFFFFF" Data="M0,5 H2 V11 H0 Z M3.5,2 H5.5 V11 H3.5 Z M7,0 H9 V11 H7 Z M10.5,4 H12.5 V11 H10.5 Z"/>
+            </Button>
+            <Button x:Name="PinBtnC" Style="{StaticResource HoverBtn}">
               <Path x:Name="PinIconC" StrokeThickness="1.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0.5"
                     Data="M3,1 H9 V2 H8 V6 L10,8 V9 H6.5 V13 H5.5 V9 H2 V8 L4,6 V2 H3 Z"/>
             </Button>
@@ -191,10 +201,15 @@
           <Canvas x:Name="TitleHostV" Grid.Row="1" Height="19" Margin="16,12,16,0" ClipToBounds="True" Background="Transparent"/>
           <Canvas x:Name="ArtistHostV" Grid.Row="2" Height="16" Margin="16,1,16,0" ClipToBounds="True" Background="Transparent"/>
           <Grid Grid.Row="3" Margin="10,8,10,10">
-            <Button x:Name="PinBtnV" Style="{StaticResource HoverBtn}" HorizontalAlignment="Left">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+            <Button x:Name="SoundBtnV" Style="{StaticResource HoverBtn}">
+              <Path x:Name="SoundIconV" Fill="#CCFFFFFF" Data="M0,5 H2 V11 H0 Z M3.5,2 H5.5 V11 H3.5 Z M7,0 H9 V11 H7 Z M10.5,4 H12.5 V11 H10.5 Z"/>
+            </Button>
+            <Button x:Name="PinBtnV" Style="{StaticResource HoverBtn}">
               <Path x:Name="PinIconV" StrokeThickness="1.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0.5"
                     Data="M3,1 H9 V2 H8 V6 L10,8 V9 H6.5 V13 H5.5 V9 H2 V8 L4,6 V2 H3 Z"/>
             </Button>
+            </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
               <Button x:Name="PrevBtnV" Style="{StaticResource Btn}" ToolTip="Previous">
                 <Path Fill="White" Data="M13,1 L5,7 L13,13 Z M1,1 H4 V13 H1 Z"/>
@@ -254,10 +269,15 @@
             <TextBlock x:Name="LyricStatus" FontSize="13" Foreground="#80FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Grid>
           <Grid Grid.Row="2" Margin="10,6,10,10">
-            <Button x:Name="PinBtnL" Style="{StaticResource HoverBtn}" HorizontalAlignment="Left">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+            <Button x:Name="SoundBtnL" Style="{StaticResource HoverBtn}">
+              <Path x:Name="SoundIconL" Fill="#CCFFFFFF" Data="M0,5 H2 V11 H0 Z M3.5,2 H5.5 V11 H3.5 Z M7,0 H9 V11 H7 Z M10.5,4 H12.5 V11 H10.5 Z"/>
+            </Button>
+            <Button x:Name="PinBtnL" Style="{StaticResource HoverBtn}">
               <Path x:Name="PinIconL" StrokeThickness="1.2" StrokeLineJoin="Round" RenderTransformOrigin="0.5,0.5"
                     Data="M3,1 H9 V2 H8 V6 L10,8 V9 H6.5 V13 H5.5 V9 H2 V8 L4,6 V2 H3 Z"/>
             </Button>
+            </StackPanel>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
               <Button x:Name="PrevBtnL" Style="{StaticResource Btn}" ToolTip="Previous">
                 <Path Fill="White" Data="M13,1 L5,7 L13,13 Z M1,1 H4 V13 H1 Z"/>
