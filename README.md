@@ -24,6 +24,7 @@
 - **Always on top**, with a pin button to switch it off (yellow pin = pinned)
 - **Four views**: full, compact, vinyl (a record with the cover on its label spins while music plays) and lyrics
 - **Lyrics** that follow the song: the line being sung is highlighted when timed lyrics exist
+- **Sound modes**: Club (deep sub-bass, mono) and Hall (big room), applied live to Yandex Music
 - **Volume bar** for Yandex Music alone; the computer's master volume is never touched
 - **Drag it anywhere**; it remembers its place, size and pin state
 - **One small `.exe`**: nothing to install, nothing running in the background
@@ -48,6 +49,7 @@ Nothing else has to be installed: the app uses only what already ships with Wind
 | Switch view | The view button or a double-click cycles full, compact, vinyl, lyrics; right-click to pick one directly |
 | Volume | Click or drag the bar on the left, or scroll the mouse wheel over the player |
 | Hide the volume bar | Right-click menu |
+| Sound mode | Right-click > Sound > Normal, Club or Hall |
 | Always on top | Pin button, or right-click menu |
 | Open Yandex Music | Press play when nothing is playing, or right-click menu |
 | Quit | Close button (full size), or right-click and choose Exit |
@@ -78,6 +80,10 @@ That means:
   Some tracks are missing there, and those show "No lyrics".
 - The volume bar sets the Yandex Music app's own level in the Windows volume mixer. It needs the
   desktop app and becomes active once the app has started playing.
+- **Sound modes** work around a Windows limit: no app may change another app's sound. While Club or Hall is on,
+  the player turns Yandex Music down to -80 dB in the Windows mixer, records its exact output with Windows
+  process loopback (Windows 10 2004+), applies the effect, and plays the result itself. Normal, closing the player,
+  or any failure hands Yandex Music its volume back.
 - It prefers the Yandex Music desktop app. If that is not running, it controls whatever Windows
   reports as the current media player, such as a browser tab.
 

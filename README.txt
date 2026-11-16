@@ -1,4 +1,4 @@
-Ya Mini Player 1.1.0
+Ya Mini Player 1.2.0
 ====================
 A tiny always-on-top remote for Yandex Music on Windows 10 / 11.
 
@@ -31,7 +31,15 @@ Controls
 - Volume bar on the left: click or drag it, or scroll the mouse wheel over the player.
   It changes only Yandex Music's volume, never the computer's master volume.
   It works with the Yandex Music desktop app once it has started playing.
-- Right-click for the menu: Full size / Compact / Vinyl / Lyrics, Volume bar, Always on top,
+- Sound (right-click > Sound): Normal, Club or Hall.
+    Club: deep sub-bass and mono, like club speakers.
+    Hall: the sound of a big room.
+  Works with the Yandex Music desktop app on Windows 10 version 2004 or later.
+  While Club or Hall is on, Yandex Music shows almost 0 in the Windows volume mixer: that is
+  expected, the player plays the music itself with the effect. Use the player's volume bar.
+  The sound is about a tenth of a second behind, which you will not notice in music.
+  Switching back to Normal or closing the player gives Yandex Music its volume back.
+- Right-click for the menu: Full size / Compact / Vinyl / Lyrics, Sound, Volume bar, Always on top,
   Open Yandex Music, Open log folder, Exit
 - If nothing is playing, the play button opens Yandex Music
 

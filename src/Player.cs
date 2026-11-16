@@ -41,9 +41,9 @@ using StreamRef = Windows.Storage.Streams.IRandomAccessStreamReference;
 [assembly: AssemblyProduct("Ya Mini Player")]
 [assembly: AssemblyDescription("Tiny floating remote for Yandex Music")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Ya Mini Player contributors")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
-[assembly: AssemblyInformationalVersion("1.1.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyInformationalVersion("1.2.0")]
 
 namespace YaMini
 {
@@ -59,7 +59,11 @@ namespace YaMini
             {
                 if (!first) return;   // already running
 
-                AppDomain.CurrentDomain.UnhandledException += (s, e) => Log.Write("Fatal error", e.ExceptionObject as Exception);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+                {
+                    Log.Write("Fatal error", e.ExceptionObject as Exception);
+                    if (SoundEngine.Current != null) SoundEngine.Current.EmergencyRestore();
+                };
                 TaskScheduler.UnobservedTaskException += (s, e) =>
                 {
                     Log.Write("Background task error", e.Exception);
@@ -165,8 +169,10 @@ namespace YaMini
     // The system master volume and other apps are never touched.
     static class AppVolume
     {
-        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-        class DeviceEnumerator { }
+        // Windows audio device list, created by class id (the sound engine creates it the same way;
+        // mixing that with a [ComImport] class for the same id breaks the casts at run time)
+        static readonly Guid DeviceEnumeratorId = new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E");
+
 
         // Only the methods used here are declared properly; the rest just hold their vtable slots.
         [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -223,15 +229,24 @@ namespace YaMini
 
         const string AppNameRu = "Яндекс Музыка";
 
+        // Automated tests only: treat a stand-in process with this name as Yandex Music
+        public static string TestName = null;
+
+        // Process name without ".exe"
+        public static bool IsYandexName(string name)
+        {
+            if (TestName != null) return string.Equals(name, TestName, StringComparison.OrdinalIgnoreCase);
+            return name.IndexOf(AppNameRu, StringComparison.OrdinalIgnoreCase) >= 0
+                || (name.IndexOf("yandex", StringComparison.OrdinalIgnoreCase) >= 0
+                    && name.IndexOf("music", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
         static bool IsYandexMusic(uint processId)
         {
             if (processId == 0) return false;
             try
             {
-                string name = Process.GetProcessById((int)processId).ProcessName;
-                return name.IndexOf(AppNameRu, StringComparison.OrdinalIgnoreCase) >= 0
-                    || (name.IndexOf("yandex", StringComparison.OrdinalIgnoreCase) >= 0
-                        && name.IndexOf("music", StringComparison.OrdinalIgnoreCase) >= 0);
+                return IsYandexName(Process.GetProcessById((int)processId).ProcessName);
             }
             catch (ArgumentException) { return false; }         // process already gone
             catch (InvalidOperationException) { return false; }
@@ -241,7 +256,7 @@ namespace YaMini
         static List<ISimpleAudioVolume> Sessions()
         {
             var found = new List<ISimpleAudioVolume>();
-            var devices = (IMMDeviceEnumerator)new DeviceEnumerator();
+            var devices = (IMMDeviceEnumerator)Activator.CreateInstance(Type.GetTypeFromCLSID(DeviceEnumeratorId));
             IMMDevice device;
             if (devices.GetDefaultAudioEndpoint(0, 1, out device) != 0) return found;   // render, multimedia
 
@@ -578,6 +593,10 @@ namespace YaMini
         int mode;
         bool playing;
         bool volDragging;
+        readonly SoundEngine sound = new SoundEngine();
+        int soundMode;
+        float pendingRestore = -1;      // Yandex Music level still to put back after a sound mode
+        MenuItem[] soundItems;
         double volLevel = -1;
         long artHash = -1;
 
@@ -695,6 +714,28 @@ namespace YaMini
                 int target = i;
                 modeItems[i].Click += delegate { SetMode(target); SaveSettings(); };
             }
+            var soundMenu = new MenuItem { Header = "Sound" };
+            string[] soundHeaders = { "Normal", "Club (deep bass, mono)", "Hall (big room)" };
+            soundItems = new MenuItem[soundHeaders.Length];
+            for (int i = 0; i < soundHeaders.Length; i++)
+            {
+                int target = i;
+                soundItems[i] = new MenuItem { Header = soundHeaders[i], IsCheckable = true };
+                soundItems[i].Click += delegate { SetSound(target); SaveSettings(); };
+                soundMenu.Items.Add(soundItems[i]);
+            }
+            sound.Failed += delegate
+            {
+                Window.Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    SetSound(Effects.Normal);
+                    SaveSettings();
+                    MessageBox.Show("The sound mode could not start on this PC, so the player switched back to Normal.\n\n" +
+                        "Sound modes need Windows 10 version 2004 or later and the Yandex Music desktop app. " +
+                        "Details were saved to the log (right-click the player, Open log folder).",
+                        "Ya Mini Player", MessageBoxButton.OK, MessageBoxImage.Information);
+                }));
+            };
             volItem = new MenuItem { Header = "Volume bar", IsCheckable = true, IsChecked = true };
             volItem.Click += delegate { SetVolumeBar(volItem.IsChecked); SaveSettings(); };
             topmostItem = new MenuItem { Header = "Always on top", IsCheckable = true, IsChecked = true };
@@ -712,6 +753,7 @@ namespace YaMini
             var menu = new ContextMenu();
             foreach (MenuItem item in modeItems) menu.Items.Add(item);
             menu.Items.Add(new Separator());
+            menu.Items.Add(soundMenu);
             menu.Items.Add(volItem);
             menu.Items.Add(topmostItem);
             menu.Items.Add(new Separator());
@@ -743,13 +785,19 @@ namespace YaMini
             };
 
             Window.MouseLeftButtonDown += OnMouseDown;
-            Window.Closing += delegate { SaveSettings(); };
+            Window.Closing += delegate
+            {
+                // Hand Yandex Music its own volume back before leaving
+                if (sound.Running) pendingRestore = sound.Stop() ? -1 : sound.Volume;
+                SaveSettings();
+            };
             Window.Loaded += delegate { SaveSettings(); };   // creates the settings file on first run
 
             settingsPath = Path.Combine(Log.Folder, "settings.txt");
             SetTopmost(true);
             SetMode(Full);
             LoadSettings();
+            SetSound(soundMode);
             ShowIdle();
 
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -916,6 +964,28 @@ namespace YaMini
 
         // ---- volume ----------------------------------------------------------
 
+        // Normal stops the engine (which gives Yandex Music its level back); Club and Hall start or retune it
+        void SetSound(int value)
+        {
+            soundMode = value;
+            for (int i = 0; i < soundItems.Length; i++) soundItems[i].IsChecked = i == value;
+            if (value == Effects.Normal)
+            {
+                if (sound.Running && !sound.Stop()) pendingRestore = sound.Volume;
+            }
+            else
+            {
+                if (!sound.Running)
+                {
+                    // Keep the loudness the user has now, or the level saved from an earlier run
+                    sound.Volume = pendingRestore >= 0 ? pendingRestore : (volLevel > 0 ? (float)volLevel : 1f);
+                    pendingRestore = -1;
+                }
+                sound.Start(value);
+            }
+            ReadVolume();
+        }
+
         void SetVolumeBar(bool visible)
         {
             volItem.IsChecked = visible;
@@ -926,6 +996,17 @@ namespace YaMini
         void ReadVolume()
         {
             if (volDragging) return;
+            if (sound.Running)
+            {
+                volLevel = sound.Volume;   // Yandex Music itself sits near zero while a sound mode plays it
+                ShowVolume();
+                return;
+            }
+            if (pendingRestore >= 0 && AppVolume.Set(pendingRestore))
+            {
+                pendingRestore = -1;
+                SaveSettings();
+            }
             float level;
             volLevel = AppVolume.TryGet(out level) ? level : -1;
             ShowVolume();
@@ -934,7 +1015,8 @@ namespace YaMini
         void SetVolume(double level)
         {
             level = Math.Max(0, Math.Min(1, level));
-            volLevel = AppVolume.Set((float)level) ? level : -1;
+            if (sound.Running) { sound.Volume = (float)level; volLevel = level; }
+            else volLevel = AppVolume.Set((float)level) ? level : -1;
             ShowVolume();
         }
 
@@ -945,7 +1027,7 @@ namespace YaMini
             volFull.Height = new GridLength(known ? volLevel : 0, GridUnitType.Star);
             volBar.Opacity = known ? 1 : 0.4;
             volBar.ToolTip = known
-                ? "Yandex Music volume: " + Math.Round(volLevel * 100) + "%"
+                ? "Yandex Music volume" + (sound.Running ? " (" + Effects.Labels[soundMode] + " sound)" : "") + ": " + Math.Round(volLevel * 100) + "%"
                 : "Volume: play something in the Yandex Music app first";
         }
 
@@ -992,6 +1074,8 @@ namespace YaMini
                     else if (key == "compact") { if (val == "1") SetMode(Compact); }   // settings from before vinyl mode
                     else if (key == "mode") SetMode(Math.Max(0, Array.IndexOf(ModeNames, val)));
                     else if (key == "volbar") SetVolumeBar(val == "1");
+                    else if (key == "sound") soundMode = Math.Max(0, Array.IndexOf(Effects.Names, val));
+                    else if (key == "yandexlevel") pendingRestore = float.Parse(val, CultureInfo.InvariantCulture);
                     else if (key == "topmost") SetTopmost(val == "1");
                 }
             }
@@ -1026,7 +1110,10 @@ namespace YaMini
                     "top=" + Window.Top.ToString(CultureInfo.InvariantCulture),
                     "mode=" + ModeNames[mode],
                     "topmost=" + (Window.Topmost ? "1" : "0"),
-                    "volbar=" + (volItem.IsChecked ? "1" : "0")
+                    "volbar=" + (volItem.IsChecked ? "1" : "0"),
+                    "sound=" + Effects.Names[soundMode],
+                    // While Yandex Music is turned down, remember its real level in case the player is cut off
+                    "yandexlevel=" + (sound.Running ? sound.Volume : pendingRestore).ToString(CultureInfo.InvariantCulture)
                 });
             }
             catch (Exception ex) { Log.Write("Settings could not be saved", ex); }

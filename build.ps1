@@ -80,7 +80,7 @@ if (-not (Test-Path $icon)) {
     "/r:$fx\System.Runtime.dll" "/r:$fx\System.Runtime.InteropServices.WindowsRuntime.dll" `
     "/r:$fx\System.Threading.Tasks.dll" `
     "/r:$md\Windows.Media.winmd" "/r:$md\Windows.Foundation.winmd" "/r:$md\Windows.Storage.winmd" `
-    "$root\src\Player.cs"
+    "$root\src\Player.cs" "$root\src\Sound.cs"
 if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 "Built $dist\YaMiniPlayer.exe"
 
