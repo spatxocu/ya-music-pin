@@ -16,6 +16,8 @@ rem Close a running copy so its file can be replaced
 taskkill /im YaMiniPlayer.exe >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 taskkill /f /im YaMiniPlayer.exe >nul 2>&1
+rem If the Club sound was on, Yandex Music is still turned down: put its volume back
+if exist "%SRC%YaMiniPlayer.exe" "%SRC%YaMiniPlayer.exe" --restore-volume
 
 if not exist "%DEST%" mkdir "%DEST%"
 

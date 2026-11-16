@@ -52,8 +52,16 @@ namespace YaMini
         public static readonly string Version = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
 
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
+            // Used by the installer and uninstaller after they end the player: put Yandex Music's
+            // volume back if the Club sound had it turned down
+            if (args.Length > 0 && args[0] == "--restore-volume")
+            {
+                Player.RestoreFromNote();
+                return;
+            }
+
             bool first;
             using (new Mutex(true, "YaMiniPlayer.SingleInstance", out first))
             {
@@ -88,7 +96,10 @@ namespace YaMini
                         Log.Write("Unexpected error", e.Exception);
                         e.Handled = true;
                     };
-                    app.Run(new Player().Window);
+                    var player = new Player();
+                    app.SessionEnding += delegate { player.Shutdown(); };
+                    app.Run(player.Window);
+                    player.Shutdown();
                     Log.Write("Closed");
                 }
                 catch (Exception ex)
@@ -596,6 +607,7 @@ namespace YaMini
         readonly SoundEngine sound = new SoundEngine();
         int soundMode;
         float pendingRestore = -1;      // Yandex Music level still to put back after a sound mode
+        float savedLevel = -1;          // the level last written to the settings file
         MenuItem[] soundItems;
         Button[] soundBtns;
         System.Windows.Shapes.Path[] soundIcons;
@@ -812,12 +824,7 @@ namespace YaMini
             };
 
             Window.MouseLeftButtonDown += OnMouseDown;
-            Window.Closing += delegate
-            {
-                // Hand Yandex Music its own volume back before leaving
-                if (sound.Running) pendingRestore = sound.Stop() ? -1 : sound.Volume;
-                SaveSettings();
-            };
+            Window.Closing += delegate { Shutdown(); };
             Window.Loaded += delegate { SaveSettings(); };   // creates the settings file on first run
 
             settingsPath = Path.Combine(Log.Folder, "settings.txt");
@@ -830,6 +837,36 @@ namespace YaMini
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             timer.Tick += async delegate { ReadVolume(); await Refresh(); };
             Window.Loaded += async delegate { ReadVolume(); await Refresh(); timer.Start(); };
+        }
+
+        public static void RestoreFromNote()
+        {
+            string path = Path.Combine(Log.Folder, "settings.txt");
+            try
+            {
+                string[] lines = File.ReadAllLines(path);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    if (!lines[i].StartsWith("yandexlevel=")) continue;
+                    float level = float.Parse(lines[i].Substring(12), CultureInfo.InvariantCulture);
+                    if (level >= 0 && AppVolume.Set(level))
+                    {
+                        lines[i] = "yandexlevel=-1";
+                        File.WriteAllLines(path, lines);
+                        Log.Write("Yandex Music volume handed back after the player was ended");
+                    }
+                }
+            }
+            catch (Exception ex) { Log.Write("Could not hand Yandex Music its volume back", ex); }
+        }
+
+        // Runs however the player ends: its own close button, Exit, Windows closing it, or sign-out.
+        // (Windows closing the app destroys the window without the Closing event, so Program calls this too.)
+        public void Shutdown()
+        {
+            // Hand Yandex Music its own volume back before leaving
+            if (sound.Running) pendingRestore = sound.Stop() ? -1 : sound.Volume;
+            SaveSettings();
         }
 
         T Find<T>(string name) where T : class
@@ -1014,7 +1051,10 @@ namespace YaMini
                 if (!sound.Running)
                 {
                     // Keep the loudness the user has now, or the level saved from an earlier run
-                    sound.Volume = pendingRestore >= 0 ? pendingRestore : (volLevel > 0 ? (float)volLevel : 1f);
+                    float current;
+                    sound.Volume = pendingRestore >= 0 ? pendingRestore
+                        : AppVolume.TryGet(out current) && current > SoundEngine.Tiny * 2 ? current
+                        : volLevel > 0 ? (float)volLevel : 1f;
                     pendingRestore = -1;
                 }
                 sound.Start(value);
@@ -1047,6 +1087,8 @@ namespace YaMini
             {
                 volLevel = sound.Volume;   // Yandex Music itself sits near zero while a sound mode plays it
                 ShowVolume();
+                // Keep the recovery note in the settings file matching the level to hand back
+                if (Math.Abs(sound.Volume - savedLevel) > 0.001f) SaveSettings();
                 return;
             }
             if (pendingRestore >= 0 && AppVolume.Set(pendingRestore))
@@ -1160,7 +1202,7 @@ namespace YaMini
                     "volbar=" + (volItem.IsChecked ? "1" : "0"),
                     "sound=" + Effects.Names[soundMode],
                     // While Yandex Music is turned down, remember its real level in case the player is cut off
-                    "yandexlevel=" + (sound.Running ? sound.Volume : pendingRestore).ToString(CultureInfo.InvariantCulture)
+                    "yandexlevel=" + (savedLevel = sound.Running ? sound.Volume : pendingRestore).ToString(CultureInfo.InvariantCulture)
                 });
             }
             catch (Exception ex) { Log.Write("Settings could not be saved", ex); }
