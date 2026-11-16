@@ -16,9 +16,9 @@ namespace YaMini
 {
     static class Effects
     {
-        public const int Normal = 0, Club = 1;
-        public static readonly string[] Names = { "normal", "club" };
-        public static readonly string[] Labels = { "Normal", "Club" };
+        public const int Normal = 0, Club = 1, EightD = 2;
+        public static readonly string[] Names = { "normal", "club", "8d" };
+        public static readonly string[] Labels = { "Normal", "Club", "8D" };
     }
 
     class SoundEngine
@@ -503,6 +503,7 @@ namespace YaMini
         public static Processor For(int effect)
         {
             if (effect == Effects.Club) return new Club();
+            if (effect == Effects.EightD) return new EightD();
             return new Plain();
         }
     }
@@ -524,6 +525,58 @@ namespace YaMini
             double m = (l + r) * 0.25;            // mono, with 6 dB of room for the boost
             m = low.Run(sub.Run(m)) * 1.6;        // limiter afterwards catches the peaks
             l = r = (float)m;
+        }
+    }
+
+    // "8D": the music travels in a circle around the listener, once every 8 seconds. No echo is added.
+    // Headphones give the full effect. Three cues sell the movement:
+    //   - level: equal-power panning between the ears,
+    //   - timing: the far ear hears the sound up to 0.6 ms later, as a real head would,
+    //   - tone: the far ear, and both ears while the sound is behind, hear it slightly muffled.
+    class EightD : Processor
+    {
+        const double Period = 8.0;                       // seconds per full circle
+        const int MaxDelay = 29;                         // 0.6 ms at 48 kHz
+        readonly double step = 2 * Math.PI / (48000 * Period);
+        readonly float[] history = new float[64];        // recent mono samples, for the far-ear delay
+        int at;
+        double phase, softL, softR;
+
+        public override void Run(ref float l, ref float r)
+        {
+            float mono = (l + r) * 0.5f;
+            history[at] = mono;
+
+            phase += step;
+            if (phase > 2 * Math.PI) phase -= 2 * Math.PI;
+            double side = Math.Sin(phase);               // -1 fully left .. +1 fully right
+            double front = Math.Cos(phase);              // +1 in front .. -1 behind
+
+            // Far ear: delayed copy (linear interpolation between samples)
+            double delay = Math.Abs(side) * MaxDelay;
+            int whole = (int)delay;
+            double part = delay - whole;
+            float a = history[(at - whole + 64) % 64], b = history[(at - whole - 1 + 64) % 64];
+            double far = a + (b - a) * part;
+            at = (at + 1) % 64;
+
+            double left = side > 0 ? far : mono;         // sound on the right: the left ear is the far one
+            double right = side < 0 ? far : mono;
+
+            // Muffling: one-pole low-pass (about 2 kHz) blended in for the far ear and when behind
+            softL += (left - softL) * 0.25;
+            softR += (right - softR) * 0.25;
+            double behind = front < 0 ? -front * 0.45 : 0;
+            double muffleL = Math.Min(0.85, behind + (side > 0 ? side * 0.5 : 0));
+            double muffleR = Math.Min(0.85, behind + (side < 0 ? -side * 0.5 : 0));
+            left = left * (1 - muffleL) + softL * muffleL;
+            right = right * (1 - muffleR) + softR * muffleR;
+
+            // Equal-power pan, scaled so the centre is as loud as the original. It stops short of hard left/right:
+            // like a real head, the far ear still hears the sound, about 19 dB quieter
+            double angle = (side * 0.85 + 1) * Math.PI / 4;
+            l = (float)(left * Math.Cos(angle) * 1.4142 * 0.9);
+            r = (float)(right * Math.Sin(angle) * 1.4142 * 0.9);
         }
     }
 
