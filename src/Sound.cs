@@ -16,9 +16,9 @@ namespace YaMini
 {
     static class Effects
     {
-        public const int Normal = 0, Club = 1, Hall = 2;
-        public static readonly string[] Names = { "normal", "club", "hall" };
-        public static readonly string[] Labels = { "Normal", "Club", "Hall" };
+        public const int Normal = 0, Club = 1;
+        public static readonly string[] Names = { "normal", "club" };
+        public static readonly string[] Labels = { "Normal", "Club" };
     }
 
     class SoundEngine
@@ -137,8 +137,8 @@ namespace YaMini
                     Check(capClient.Initialize(0, 0x00020000 | unchecked((int)0x80000000), 2000000, 0, format, IntPtr.Zero), "capture setup");
                     string deviceId;
                     renClient = OpenDefaultOutput(out deviceId);
-                    // 100 ms output buffer; Windows converts our format to whatever the speakers use
-                    Check(renClient.Initialize(0, unchecked((int)0x80000000) | 0x08000000, 1000000, 0, format, IntPtr.Zero), "output setup");
+                    // 200 ms output buffer (only a small part is kept filled); Windows converts our format to the speakers'
+                    Check(renClient.Initialize(0, unchecked((int)0x80000000) | 0x08000000, 2000000, 0, format, IntPtr.Zero), "output setup");
                     var capture = (IAudioCaptureClient)Service(capClient, typeof(IAudioCaptureClient).GUID);
                     var render = (IAudioRenderClient)Service(renClient, typeof(IAudioRenderClient).GUID);
                     uint renFrames;
@@ -147,7 +147,15 @@ namespace YaMini
                     TakeOver();
                     Check(capClient.Start(), "capture start");
                     Check(renClient.Start(), "output start");
-                    Pump(capture, render, renClient, renFrames, root, deviceId);
+
+                    // Slow checks live on their own thread: when they ran on the audio thread they held it
+                    // up for up to 80 ms at a time, and the music dropped out
+                    restart = false;
+                    var watcher = new Thread(delegate() { Watch(root, deviceId); }) { IsBackground = true, Name = "Sound checks" };
+                    watcher.SetApartmentState(ApartmentState.MTA);
+                    watcher.Start();
+                    try { Pump(capture, render, renClient, renFrames); }
+                    finally { restart = true; watcher.Join(2000); }
                     return true;
                 }
                 finally { Marshal.FreeHGlobal(format); }
@@ -161,8 +169,25 @@ namespace YaMini
             }
         }
 
-        void Pump(IAudioCaptureClient capture, IAudioRenderClient render, IAudioClient renClient,
-            uint renFrames, uint root, string deviceId)
+        volatile bool restart;   // set by the checks when this run should end
+
+        // Every quarter second: keep new Yandex Music streams turned down, and notice when Yandex Music
+        // closes or the speakers change
+        void Watch(uint root, string deviceId)
+        {
+            while (!stop && !restart)
+            {
+                try
+                {
+                    TakeOver();
+                    if (!Alive(root) || DefaultOutputId() != deviceId) restart = true;
+                }
+                catch (Exception ex) { Log.Write("Sound mode check failed", ex); }
+                for (int i = 0; i < 5 && !stop && !restart; i++) Thread.Sleep(50);
+            }
+        }
+
+        void Pump(IAudioCaptureClient capture, IAudioRenderClient render, IAudioClient renClient, uint renFrames)
         {
             var ring = new float[RingFrames * 2];
             int head = 0, count = 0;           // ring write position and frames waiting, in frames
@@ -170,18 +195,11 @@ namespace YaMini
             int effect = -1;
             Processor fx = null;
             var limiter = new Limiter();
-            var clock = Stopwatch.StartNew();
-            long nextCheck = 0;
+            const int Reserve = Rate * 60 / 1000;     // 60 ms kept queued for the speakers
+            bool primed = false;
 
-            while (!stop)
+            while (!stop && !restart)
             {
-                if (clock.ElapsedMilliseconds >= nextCheck)
-                {
-                    nextCheck = clock.ElapsedMilliseconds + 250;
-                    TakeOver();                                        // new Yandex Music streams start at their own level
-                    if (!Alive(root)) return;                          // Yandex Music closed or restarted
-                    if (DefaultOutputId() != deviceId) return;         // speakers/headphones switched
-                }
                 if (Effect != effect) { effect = Effect; fx = Processor.For(effect); }
 
                 // Collect what Yandex Music played since last time
@@ -204,8 +222,9 @@ namespace YaMini
                         packet[i] = v;
                         if (v > loudest) loudest = v; else if (-v > loudest) loudest = -v;
                     }
-                    // A stream that was not turned down yet would come out 80 dB too loud: drop it and fix it now
-                    if (loudest > 2f) { Array.Clear(packet, 0, n * 2); TakeOver(); }
+                    // A stream that was not turned down yet would come out 80 dB too loud: drop it until the
+                    // checks turn it down (within a quarter second)
+                    if (loudest > 2f) Array.Clear(packet, 0, n * 2);
 
                     float volume = Volume;
                     for (int i = 0; i < n; i++)
@@ -222,13 +241,17 @@ namespace YaMini
                     Check(capture.GetNextPacketSize(out next), "capture read");
                 }
 
-                // After a stall, skip ahead rather than stay behind the music
-                if (count > Rate / 5) count = Rate / 25;
+                // Never fall more than 0.3 s behind the music
+                if (count > Rate * 3 / 10) count = Reserve;
 
                 uint padding;
                 Check(renClient.GetCurrentPadding(out padding), "output fill");
+                // Start (and restart after running dry) only once a reserve is queued, so small hiccups
+                // are absorbed instead of heard
+                if (padding == 0) primed = false;
+                if (!primed && count >= Reserve) primed = true;
                 int space = (int)(renFrames - padding);
-                int write = Math.Min(space, count);
+                int write = primed ? Math.Min(space, count) : 0;
                 if (write > 0)
                 {
                     IntPtr dest;
@@ -479,7 +502,6 @@ namespace YaMini
 
         public static Processor For(int effect)
         {
-            if (effect == Effects.Hall) return new Hall();
             if (effect == Effects.Club) return new Club();
             return new Plain();
         }
@@ -502,94 +524,6 @@ namespace YaMini
             double m = (l + r) * 0.25;            // mono, with 6 dB of room for the boost
             m = low.Run(sub.Run(m)) * 1.6;        // limiter afterwards catches the peaks
             l = r = (float)m;
-        }
-    }
-
-    // A large, soft room: Freeverb (Jezar's public-domain design), tuned long and fairly bright
-    class Hall : Processor
-    {
-        static readonly int[] CombTunings = { 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 };
-        static readonly int[] AllpassTunings = { 556, 441, 341, 225 };
-        const int Spread = 23;
-
-        readonly Comb[] combL = new Comb[8], combR = new Comb[8];
-        readonly Allpass[] passL = new Allpass[4], passR = new Allpass[4];
-        readonly float[] preDelay = new float[48000 * 25 / 1000];
-        int preIndex;
-        const float Wet = 0.62f, Dry = 0.85f, InputGain = 0.015f;
-
-        public Hall()
-        {
-            double scale = 48000.0 / 44100.0;
-            for (int i = 0; i < 8; i++)
-            {
-                combL[i] = new Comb((int)(CombTunings[i] * scale), 0.94f, 0.14f);
-                combR[i] = new Comb((int)((CombTunings[i] + Spread) * scale), 0.94f, 0.14f);
-            }
-            for (int i = 0; i < 4; i++)
-            {
-                passL[i] = new Allpass((int)(AllpassTunings[i] * scale));
-                passR[i] = new Allpass((int)((AllpassTunings[i] + Spread) * scale));
-            }
-        }
-
-        public override void Run(ref float l, ref float r)
-        {
-            // 25 ms before the room answers keeps the voice clear
-            float input = preDelay[preIndex];
-            preDelay[preIndex] = (l + r) * InputGain;
-            if (++preIndex == preDelay.Length) preIndex = 0;
-
-            float outL = 0, outR = 0;
-            for (int i = 0; i < 8; i++) { outL += combL[i].Run(input); outR += combR[i].Run(input); }
-            for (int i = 0; i < 4; i++) { outL = passL[i].Run(outL); outR = passR[i].Run(outR); }
-            l = (l * Dry + outL * Wet) * 0.85f;
-            r = (r * Dry + outR * Wet) * 0.85f;
-        }
-
-        class Comb
-        {
-            readonly float[] buffer;
-            int index;
-            float store;
-            readonly float feedback, damp1, damp2;
-
-            public Comb(int size, float feedback, float damp)
-            {
-                buffer = new float[size];
-                this.feedback = feedback;
-                damp1 = damp;
-                damp2 = 1 - damp;
-            }
-
-            public float Run(float input)
-            {
-                float output = buffer[index];
-                store = output * damp2 + store * damp1;
-                if (store < 1e-15f && store > -1e-15f) store = 0;   // keeps silence from slowing the CPU
-                buffer[index] = input + store * feedback;
-                if (++index == buffer.Length) index = 0;
-                return output;
-            }
-        }
-
-        class Allpass
-        {
-            readonly float[] buffer;
-            int index;
-
-            public Allpass(int size) { buffer = new float[size]; }
-
-            public float Run(float input)
-            {
-                float held = buffer[index];
-                float output = held - input;
-                float next = input + held * 0.5f;
-                if (next < 1e-15f && next > -1e-15f) next = 0;
-                buffer[index] = next;
-                if (++index == buffer.Length) index = 0;
-                return output;
-            }
         }
     }
 

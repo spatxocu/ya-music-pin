@@ -31,12 +31,11 @@ Controls
 - Volume bar on the left: click or drag it, or scroll the mouse wheel over the player.
   It changes only Yandex Music's volume, never the computer's master volume.
   It works with the Yandex Music desktop app once it has started playing.
-- Sound button (the little bars next to the pin): each click moves Normal -> Club -> Hall.
-  It turns yellow while Club or Hall is on. Also in right-click > Sound.
-    Club: deep sub-bass and mono, like club speakers.
-    Hall: the sound of a big room.
+- Club sound button (the little bars next to the pin): turns the Club sound on or off.
+  Club sound = deep sub-bass and mono, like club speakers. The button is yellow while it is on.
+  Also in right-click > Sound.
   Works with the Yandex Music desktop app on Windows 10 version 2004 or later.
-  While Club or Hall is on, Yandex Music shows almost 0 in the Windows volume mixer: that is
+  While the Club sound is on, Yandex Music shows almost 0 in the Windows volume mixer: that is
   expected, the player plays the music itself with the effect. Use the player's volume bar.
   The sound is about a tenth of a second behind, which you will not notice in music.
   Switching back to Normal or closing the player gives Yandex Music its volume back.

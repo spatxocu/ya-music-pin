@@ -663,12 +663,12 @@ namespace YaMini
             {
                 soundBtns[i] = Find<Button>("SoundBtn" + suffixes[i]);
                 soundIcons[i] = Find<System.Windows.Shapes.Path>("SoundIcon" + suffixes[i]);
-                // Each click moves to the next sound: Normal -> Club -> Hall -> Normal
+                // Each click turns the Club sound on or off
                 soundBtns[i].Click += delegate
                 {
-                    SetSound((soundMode + 1) % Effects.Labels.Length);
+                    SetSound(soundMode == Effects.Normal ? Effects.Club : Effects.Normal);
                     SaveSettings();
-                    ShowToast(soundMode == Effects.Normal ? "Normal sound" : Effects.Labels[soundMode] + " sound");
+                    ShowToast(soundMode == Effects.Club ? "Club sound on" : "Club sound off");
                 };
             }
             toast = Find<FrameworkElement>("Toast");
@@ -737,7 +737,7 @@ namespace YaMini
                 modeItems[i].Click += delegate { SetMode(target); SaveSettings(); };
             }
             var soundMenu = new MenuItem { Header = "Sound" };
-            string[] soundHeaders = { "Normal", "Club (deep bass, mono)", "Hall (big room)" };
+            string[] soundHeaders = { "Normal", "Club (deep bass, mono)" };
             soundItems = new MenuItem[soundHeaders.Length];
             for (int i = 0; i < soundHeaders.Length; i++)
             {
@@ -747,7 +747,7 @@ namespace YaMini
                 {
                     SetSound(target);
                     SaveSettings();
-                    ShowToast(target == Effects.Normal ? "Normal sound" : Effects.Labels[target] + " sound");
+                    ShowToast(target == Effects.Club ? "Club sound on" : "Club sound off");
                 };
                 soundMenu.Items.Add(soundItems[i]);
             }
@@ -991,19 +991,18 @@ namespace YaMini
 
         // ---- volume ----------------------------------------------------------
 
-        // Normal stops the engine (which gives Yandex Music its level back); Club and Hall start or retune it
+        // Normal stops the engine (which gives Yandex Music its level back); Club starts it
         void SetSound(int value)
         {
             soundMode = value;
             for (int i = 0; i < soundItems.Length; i++) soundItems[i].IsChecked = i == value;
 
-            // The sound button lights up yellow while Club or Hall is on, like the pin
+            // The sound button lights up yellow while the Club sound is on, like the pin
             bool on = value != Effects.Normal;
-            string next = Effects.Labels[(value + 1) % Effects.Labels.Length];
             for (int i = 0; i < soundBtns.Length; i++)
             {
                 soundIcons[i].Fill = on ? new SolidColorBrush(Color.FromRgb(0xFF, 0xCC, 0x00)) : Dim(0xCC);
-                soundBtns[i].ToolTip = "Sound: " + Effects.Labels[value] + " (click for " + next + ")";
+                soundBtns[i].ToolTip = on ? "Club sound: on (click to turn off)" : "Club sound: off (click to turn on)";
                 if (on) soundBtns[i].Opacity = 1; else soundBtns[i].ClearValue(UIElement.OpacityProperty);
             }
             if (value == Effects.Normal)
