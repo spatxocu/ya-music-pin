@@ -528,14 +528,14 @@ namespace YaMini
         }
     }
 
-    // "8D": the music travels in a circle around the listener, once every 8 seconds. No echo is added.
+    // "8D": the music travels in a circle around the listener, once every 6 seconds. No echo is added.
     // Headphones give the full effect. Three cues sell the movement:
     //   - level: equal-power panning between the ears,
     //   - timing: the far ear hears the sound up to 0.6 ms later, as a real head would,
     //   - tone: the far ear, and both ears while the sound is behind, hear it slightly muffled.
     class EightD : Processor
     {
-        const double Period = 8.0;                       // seconds per full circle
+        const double Period = 6.0;                       // seconds per full circle
         const int MaxDelay = 29;                         // 0.6 ms at 48 kHz
         readonly double step = 2 * Math.PI / (48000 * Period);
         readonly float[] history = new float[64];        // recent mono samples, for the far-ear delay

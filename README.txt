@@ -33,7 +33,7 @@ Controls
   It works with the Yandex Music desktop app once it has started playing.
 - Sound button (the little bars next to the pin): each click moves off -> Club -> 8D -> off.
   Club = deep sub-bass and mono, like club speakers.
-  8D = the music circles around your head every 8 seconds (best on headphones, no echo).
+  8D = the music circles around your head every 6 seconds (best on headphones, no echo).
   The button is yellow while an effect is on. Also in right-click > Sound.
   Works with the Yandex Music desktop app on Windows 10 version 2004 or later.
   While an effect is on, Yandex Music shows almost 0 in the Windows volume mixer: that is
